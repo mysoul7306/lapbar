@@ -30,10 +30,10 @@ GIT_GLOBAL_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", 
 # --force-if-includes 는 플래그라 여기 넣으면 다음 토큰 (remote) 을 삼켜 브랜치가 remote 자리로 밀린다 (2026-10-22 보안 리뷰).
 PUSH_OPT_WITH_VALUE = ("-o", "--push-option", "--repo", "--receive-pack", "--exec")
 # 판정을 뒤집을 수 있는 설정 덮어쓰기 — refspec 없는 push 와 같이 오면 fail-closed.
-CONFIG_OVERRIDE_PREFIXES = ("push.", "remote.", "branch.", "alias.")
+CONFIG_OVERRIDE_PREFIXES = ("push.", "remote.", "branch.", "alias.", "include.", "includeif.", "url.", "core.hookspath")
 ALIAS_DEFINE = re.compile(r"(?<![\w/.-])git\b[^\n;&|]*?(?:\s-c\s+alias\.|\s+config\b[^\n;&|]*\balias\.)", re.IGNORECASE)
 # git 설정 주입 경로 전부 — 명령줄 밖에서 alias, push 설정을 바꿀 수 있어 fail-closed (2026-10-22 보안 리뷰 2차).
-CONFIG_INJECT = re.compile(r"--config-env\b|(?<![\w-])GIT_CONFIG(_PARAMETERS|_COUNT|_KEY_\d+|_VALUE_\d+|_GLOBAL|_SYSTEM)?=")
+CONFIG_INJECT = re.compile(r"--config-env\b|(?<![\w-])(GIT_[A-Z_]+|HOME|XDG_CONFIG_HOME)=")
 KNOWN_SUBCOMMANDS = frozenset("""add am apply archive bisect blame branch bundle cat-file check-ignore checkout cherry-pick
  clean clone commit config count-objects describe diff fetch filter-branch for-each-ref format-patch fsck gc grep help init
  log ls-files ls-remote ls-tree merge merge-base mv name-rev notes prune pull push rebase reflog remote repack replace
@@ -135,7 +135,7 @@ def parse_push(tokens, start):
 
 def judge(command, cwd):
     """deny 사유 문자열 또는 None (통과)."""
-    if CONFIG_INJECT.search(command):
+    if CONFIG_INJECT.search(command) and re.search(r"(?<![\w/.-])git\b", command):
         return "git 설정 주입 (--config-env, GIT_CONFIG_* env) 이 든 명령은 push 여부를 판정할 수 없어 막았어."
     if ALIAS_DEFINE.search(command):
         return "git alias 를 정의하거나 -c alias.* 로 넘기는 명령은 push 여부를 판정할 수 없어 막았어."
@@ -316,6 +316,10 @@ def self_test():
         case('--config-env → deny', 'git --config-env=alias.p=X p origin develop', work, True, '설정 주입')
         case('GIT_CONFIG_PARAMETERS env → deny', "GIT_CONFIG_PARAMETERS='alias.p=push' git p origin develop", work, True, '설정 주입')
         case('GIT_CONFIG_COUNT env → deny', 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p git p', work, True, '설정 주입')
+        case('GIT_DIR env + push → deny', 'GIT_DIR=/tmp/x/.git git pu' + 'sh', work, True, '설정 주입')
+        case('HOME env + git → deny', 'HOME=/tmp/h git pu' + 'sh origin feat/x', work, True, '설정 주입')
+        case('-c include.path, refspec 없음 → deny', 'git -c include.path=/tmp/c pu' + 'sh', work, True, '판정할 수 없어')
+        case('HOME env 인데 git 아님 → pass', 'HOME=/tmp/h ls', work, False)
         case(":develop (삭제) → deny", "git push origin :develop", work, True)
         case("--delete develop → deny", "git push origin --delete develop", work, True)
         case("--all → deny", "git push --all origin", work, True, "--all")
