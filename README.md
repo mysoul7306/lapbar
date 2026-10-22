@@ -91,6 +91,8 @@ PYTHONPATH=src python3 -m beacon.cli --help
 
 **PolyForm Noncommercial 1.0.0** — 개인, 교육, 연구, 비영리 등 비상업 목적이면 자유롭게 쓰고 고치고 나눌 수 있다. 상업 목적 사용은 허용하지 않는다 (별도 허락 필요). OSI 정의의 오픈소스는 아니다. 전문은 `LICENSE`.
 
+**왜 공개했나** — 비싼 모델은 머리로, 싼 모델은 손발로 쓰는 건 그냥 합리적인 소비다. 누군가 이런 합리적인 소비에 오히려 돈을 받으며 이익을 추구하는 게 싫어서 공개했다. 비상업 라이선스를 고른 이유도 같다.
+
 ## English summary
 
 `beacon` ships a small Claude Code harness whose point is cost: an expensive head model does the thinking, and hooks force every subagent / workflow call to name a cheaper model and an explicit effort level (deny on omission, approval tag required for the top tier). It also blocks pushes to protected branches and lints your memory directory on session start. `beacon report` scans your own transcripts, dedupes by request id, prices every request at list price, and shows the counterfactual: what it would have cost had every subagent run on the head model. Rules are in Korean (the author's working language); install never overwrites your files.
