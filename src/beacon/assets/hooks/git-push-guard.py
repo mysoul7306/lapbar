@@ -31,7 +31,7 @@ GIT_GLOBAL_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", 
 PUSH_OPT_WITH_VALUE = ("-o", "--push-option", "--repo", "--receive-pack", "--exec")
 # 판정을 뒤집을 수 있는 설정 덮어쓰기 — refspec 없는 push 와 같이 오면 fail-closed.
 CONFIG_OVERRIDE_PREFIXES = ("push.", "remote.", "branch.", "alias.", "include.", "includeif.", "url.", "core.hookspath")
-ALIAS_DEFINE = re.compile(r"(?<![\w/.-])git\b[^\n;&|]*?(?:\s-c\s+alias\.|\s+config\b[^\n;&|]*\balias\.)", re.IGNORECASE)
+ALIAS_DEFINE = re.compile(r"(?<![\w.-])git\b[^\n;&|]*?(?:\s-c\s+alias\.|\s+config\b[^\n;&|]*\balias\.)", re.IGNORECASE)
 # git 설정 주입 경로 전부 — 명령줄 밖에서 alias, push 설정을 바꿀 수 있어 fail-closed (2026-10-22 보안 리뷰 2차).
 CONFIG_INJECT = re.compile(r"--config-env\b|(?<![\w-])(GIT_[A-Z_]+|HOME|XDG_CONFIG_HOME)=")
 KNOWN_SUBCOMMANDS = frozenset("""add am apply archive bisect blame branch bundle cat-file check-ignore checkout cherry-pick
@@ -42,7 +42,8 @@ KNOWN_SUBCOMMANDS = frozenset("""add am apply archive bisect blame branch bundle
 GUIDE = ("develop / main push 는 사용자 몫이야 — Claude 는 feature 브랜치만 push 하고, merge 까지 한 뒤 "
          "\"push = 사용자\" 으로 남겨 둬. (규칙 ~/.claude/rules/git-workflow.md)")
 SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\||\n")
-RAW_PUSH = re.compile(r"(?<![\w/.-])git\b(?:\s+-[^\s]+(?:\s+[^\s]+)?)*\s+push(?![\w./-])")
+# `git` 앞에 `/` 를 허용해 /usr/bin/git, ./git 도 잡는다 (2026-10-22 보안 리뷰 4차).
+RAW_PUSH = re.compile(r"(?<![\w.-])git\b(?:\s+-[^\s]+(?:\s+[^\s]+)?)*\s+push(?![\w./-])")
 
 
 def deny(reason):
@@ -135,7 +136,7 @@ def parse_push(tokens, start):
 
 def judge(command, cwd):
     """deny 사유 문자열 또는 None (통과)."""
-    if CONFIG_INJECT.search(command) and re.search(r"(?<![\w/.-])git\b", command):
+    if CONFIG_INJECT.search(command) and _mentions_git(command):
         return "git 설정 주입 (--config-env, GIT_CONFIG_* env) 이 든 명령은 push 여부를 판정할 수 없어 막았어."
     if ALIAS_DEFINE.search(command):
         return "git alias 를 정의하거나 -c alias.* 로 넘기는 명령은 push 여부를 판정할 수 없어 막았어."
@@ -176,6 +177,15 @@ def judge(command, cwd):
     if parsed < raw_hits:
         return "git push 가 %d곳인데 %d곳만 판정됐어 — 숨은 push 가 있어 막았어." % (raw_hits, parsed)
     return reasons[0] if reasons else None
+
+
+def _mentions_git(command):
+    """shlex 토큰 기준으로 git 실행이 있는지 (따옴표로 못 숨기게). 못 풀면 fail-closed True."""
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return True
+    return any(t == "git" or t.endswith("/git") for t in tokens)
 
 
 def alias_push_reason(command, cwd):
@@ -320,6 +330,9 @@ def self_test():
         case('HOME env + git → deny', 'HOME=/tmp/h git pu' + 'sh origin feat/x', work, True, '설정 주입')
         case('-c include.path, refspec 없음 → deny', 'git -c include.path=/tmp/c pu' + 'sh', work, True, '판정할 수 없어')
         case('HOME env 인데 git 아님 → pass', 'HOME=/tmp/h ls', work, False)
+        case('/usr/bin/git 절대경로 push develop → deny', '/usr/bin/git push origin develop', work, True, 'develop')
+        case('./git 상대경로 push main → deny', './git push origin main', work, True)
+        case('/usr/bin/git push feat/x → pass', '/usr/bin/git push origin feat/x', work, False)
         case(":develop (삭제) → deny", "git push origin :develop", work, True)
         case("--delete develop → deny", "git push origin --delete develop", work, True)
         case("--all → deny", "git push --all origin", work, True, "--all")
