@@ -21,6 +21,8 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 - **보호 브랜치 push 차단** — `git-push-guard.py` 가 develop / main / master 로 가는 push 를 refspec, upstream 까지 풀어 판정하고 못 풀면 fail-closed 로 막는다. 머지는 AI 가, push 는 사람이.
 - **메모리 위생** — `memory-lint-hook.py` 가 세션 시작 때 메모리 디렉토리의 깨진 링크, 공인 IP, 비밀값, 라우터 크기를 점검한다.
 
+두 가드는 **정규식 기반** 이다 — AI 가 실수로 push 하거나 model 을 빠뜨리는 걸 막는 안전장치이지, 작정한 우회 (eval, 설정 주입, 셸 트릭) 를 전부 막는 샌드박스가 아니다. 알려진 우회 꼴은 self-test 케이스로 하나씩 닫고 있고 (push 53, model 80), AST 파서 전환은 다음 판 과제.
+
 ## 얼마나 아끼나
 
 `beacon report` 는 `~/.claude/projects/` 의 transcript (jsonl) 를 읽어 요청마다 모델과 토큰 (input, output, cache read / write) 을 모으고, **서브에이전트 요청 전부를 머리 모델 단가로 다시 계산한 가정 비용** 과 실제 비용을 비교한다. before / after 가 필요 없는 반사실 계산이라 설치 첫날부터 숫자가 나온다.
