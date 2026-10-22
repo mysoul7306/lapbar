@@ -26,7 +26,7 @@ HAIKU = "claude-haiku-5-5"
 MYSTERY = "claude-mystery-9"
 
 
-def assistant(rid, model, ts, inp=0, cw=0, cr=0, out=0, effort=None):
+def assistant(rid, model, ts, inp=0, cw=0, cr=0, out=0, effort=None, cw_1h=None):
     record = {
         "type": "assistant",
         "requestId": rid,
@@ -36,6 +36,10 @@ def assistant(rid, model, ts, inp=0, cw=0, cr=0, out=0, effort=None):
             "cache_read_input_tokens": cr, "output_tokens": out,
         }},
     }
+    if cw_1h is not None:
+        split = {"ephemeral_5m_input_tokens": cw - cw_1h, "ephemeral_1h_input_tokens": cw_1h}
+        usage = {**record["message"]["usage"], "cache_creation": split}
+        record = {**record, "message": {**record["message"], "usage": usage}}
     return {**record, "effort": effort} if effort else record
 
 
@@ -140,7 +144,9 @@ class ReportTest(unittest.TestCase):
         self.assertAlmostEqual(cf["actual_usd"], actual, delta=1e-4)
         self.assertAlmostEqual(cf["if_all_head_usd"], if_all_head, delta=1e-4)
         self.assertAlmostEqual(cf["saved_usd"], if_all_head - actual, delta=1e-4)
-        self.assertAlmostEqual(cf["saved_pct"], round((if_all_head - actual) / if_all_head * 100, 1), places=1)
+        self.assertAlmostEqual(cf["saved_pct_of_if_all_head"], (if_all_head - actual) / if_all_head * 100, delta=0.06)
+        self.assertAlmostEqual(cf["saved_pct_of_actual"], (if_all_head - actual) / actual * 100, delta=0.06)
+        self.assertEqual((data["head_model"], data["head_model_source"]), (FABLE, "inferred"))
         # Spot check one price: 1000 input + 2000 cache_read + 300 output on Opus.
         self.assertAlmostEqual(cost_usd(subs[0][0], opus), (1000 * 4 + 2000 * 0.2 + 300 * 20) / 1e6)
 
@@ -169,6 +175,7 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(err.count(f"WARN: no price for model '{MYSTERY}'"), 1)
         self.assertIn(f"{MYSTERY} [unpriced]", out)
         self.assertIn("Summary: subagents on cheaper models saved $", out)
+        self.assertIn("(1 unpriced models excluded)", out)
         data, _ = self.report_json("--since", "2026-10-13")
         mystery = rows_by_model(data, "subagent")[MYSTERY]
         self.assertEqual((mystery["priced"], mystery["cost_usd"]), (False, 0.0))
@@ -188,6 +195,74 @@ class ReportTest(unittest.TestCase):
         self.assertIn("no price entry", err)
 
 
+class ReportReviewFixesTest(unittest.TestCase):
+    def fresh_root(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return Path(tmp.name)
+
+    def report_json(self, root, *argv):
+        code, out, err = run_report(root, "--json", *argv)
+        self.assertEqual(code, 0, err)
+        return json.loads(out)
+
+    def test_head_inferred_from_highest_cost_head_model(self):
+        root = self.fresh_root()
+        write_jsonl(root / "p" / "s.jsonl", [
+            assistant("h1", OPUS, "2026-10-14T00:00:00Z", inp=1_000_000),
+            assistant("h2", FABLE, "2026-10-14T00:00:01Z", inp=1000),
+        ])
+        write_jsonl(root / "p" / "s" / "subagents" / "agent-a.jsonl", [
+            assistant("s1", HAIKU, "2026-10-14T00:00:02Z", inp=1_000_000),
+        ])
+        data = self.report_json(root)
+        self.assertEqual((data["head_model"], data["head_model_source"]), (OPUS, "inferred"))
+        self.assertAlmostEqual(data["counterfactual"]["if_all_head_usd"], 4.0 + 0.01 + 4.0, delta=1e-4)
+        explicit = self.report_json(root, "--head", "fable")
+        self.assertEqual((explicit["head_model"], explicit["head_model_source"]), (FABLE, "argument"))
+        _code, out, _err = run_report(root)
+        self.assertIn(f"priced as {OPUS} (inferred)", out)
+
+    def test_no_head_rows_is_usage_error(self):
+        root = self.fresh_root()
+        write_jsonl(root / "p" / "s" / "subagents" / "agent-a.jsonl", [
+            assistant("s1", HAIKU, "2026-10-14T00:00:00Z", inp=10),
+        ])
+        code, _out, err = run_report(root)
+        self.assertEqual(code, 2)
+        self.assertIn("pass --head", err)
+
+    def test_dates_must_be_strict_iso(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parse(["--since", "20261013"])
+        self.assertEqual(parse(["--since", "2026-1-3"]).since, "2026-01-03")
+
+    def test_one_hour_cache_writes_priced_at_double_input(self):
+        root = self.fresh_root()
+        write_jsonl(root / "p" / "s.jsonl", [
+            assistant("h1", OPUS, "2026-10-14T00:00:00Z", cw=1_000_000, cw_1h=400_000),
+            assistant("h2", OPUS, "2026-10-14T00:00:01Z", cw=1_000_000),
+        ])
+        data = self.report_json(root)
+        row = rows_by_model(data, "head")[OPUS]
+        self.assertEqual(row["cache_creation_1h_input_tokens"], 400_000)
+        self.assertEqual(row["cache_creation_5m_input_tokens"], 1_600_000)
+        # 1.6M x 5.0 (5m) + 0.4M x 8.0 (1h) per MTok
+        self.assertAlmostEqual(row["cost_usd"], 1.6 * 5.0 + 0.4 * 8.0, delta=1e-4)
+        self.assertEqual(data["cache_write"], {"tokens_5m": 1_600_000, "tokens_1h": 400_000, "share_1h_pct": 20.0})
+
+    def test_session_file_wins_over_subagent_file_for_same_request(self):
+        root = self.fresh_root()
+        write_jsonl(root / "p" / "s1.jsonl", [assistant("dup", FABLE, "2026-10-14T00:00:00Z", inp=10)])
+        write_jsonl(root / "p" / "s1" / "subagents" / "agent-a.jsonl", [
+            assistant("dup", FABLE, "2026-10-14T00:00:00Z", inp=10),
+            assistant("own", HAIKU, "2026-10-14T00:00:01Z", inp=10),
+        ])
+        data = self.report_json(root)
+        self.assertEqual(data["requests"], {"total": 2, "head": 1, "subagent": 1, "workflow": 0})
+        self.assertEqual(set(rows_by_model(data, "subagent")), {HAIKU})
+
+
 class PricingTest(unittest.TestCase):
     def test_normalize_and_resolve(self):
         prices = load_prices()
@@ -196,7 +271,8 @@ class PricingTest(unittest.TestCase):
             "opus": OPUS, "fable": FABLE, "sonnet": SONNET, "haiku": HAIKU,
             "claude-sonnet-5-5-20261001": SONNET, "claude-fable-5-1[1m]": FABLE,
             "claude-opus-5": "claude-opus-5", "claude-opus-4-8-20260301": "claude-opus-4-8",
-            "claude-opus-4": "claude-opus-4-8", "claude-opus-3": None, "gpt-x": None, "": None,
+            "claude-opus-4": None, "claude-opus-4-20250514": None, "claude-opus-3": None,
+            "claude-sonnet": SONNET, "gpt-x": None, "": None,
         }
         for raw, expected in cases.items():
             with self.subTest(raw=raw):
@@ -206,6 +282,7 @@ class PricingTest(unittest.TestCase):
         prices = load_prices()
         self.assertEqual(prices.as_of, "2026-10-06")
         self.assertEqual(prices.models[FABLE]["cache_write"], prices.models[FABLE]["input"] * 1.25)
+        self.assertEqual(prices.models[FABLE]["cache_write_1h"], prices.models[FABLE]["input"] * 2)
         self.assertIn("estimate", prices.note)
 
 

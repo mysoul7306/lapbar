@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -19,7 +20,8 @@ from beacon import install as inst
 class DoctorTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        base = Path(self._tmp.name)
+        base = Path(self._tmp.name).resolve()
+        self.base = base
         self.assets = make_assets(base / "assets")
         self.target = base / "home" / ".claude"
         result = inst.install(self.target, assets_root=self.assets)
@@ -51,6 +53,25 @@ class DoctorTest(unittest.TestCase):
         checks = self.diagnose()
         self.assertEqual(self.results(checks)[("wiring", "hooks/guard.py")], doctor.FAIL)
         self.assertEqual(self.results(checks)[("wiring", "hooks/start.py")], doctor.PASS)
+        self.assertEqual(doctor.exit_code(checks), 1)
+
+    def rewire_guard(self, matcher: str, command: str) -> None:
+        path = self.target / "settings.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        guard = {"matcher": matcher, "hooks": [{"type": "command", "command": command}]}
+        path.write_text(json.dumps({"hooks": {**data["hooks"], "PreToolUse": [guard]}}),
+                        encoding="utf-8")
+
+    def test_home_relative_wiring_passes(self) -> None:
+        self.rewire_guard("Bash", "python3 ~/.claude/hooks/guard.py")
+        with mock.patch.dict(os.environ, {"HOME": str(self.base / "home")}):
+            checks = self.diagnose()
+        self.assertEqual(self.results(checks)[("wiring", "hooks/guard.py")], doctor.PASS)
+
+    def test_wiring_under_other_matcher_fails(self) -> None:
+        self.rewire_guard("Write", f"python3 {self.target}/hooks/guard.py")
+        checks = self.diagnose()
+        self.assertEqual(self.results(checks)[("wiring", "hooks/guard.py")], doctor.FAIL)
         self.assertEqual(doctor.exit_code(checks), 1)
 
     def test_failing_selftest_fails_with_reason(self) -> None:

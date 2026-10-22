@@ -10,19 +10,23 @@ from types import MappingProxyType
 from typing import Mapping
 
 PRICE_FIELDS = ("input", "output", "cache_read", "cache_write")
-# Transcript usage key -> price field.
+CACHE_WRITE_1H_FIELD = "cache_write_1h"
+CACHE_WRITE_1H_INPUT_MULTIPLIER = 2.0
+# Transcript usage key -> price field. Cache writes are split by TTL in cost_usd.
 TOKEN_PRICE_FIELD = MappingProxyType({
     "input_tokens": "input",
-    "cache_creation_input_tokens": "cache_write",
     "cache_read_input_tokens": "cache_read",
     "output_tokens": "output",
 })
+CACHE_WRITE_TOTAL_KEY = "cache_creation_input_tokens"
+CACHE_WRITE_1H_KEY = "cache_creation_1h_input_tokens"
 TOKENS_PER_UNIT = 1_000_000
 PACKAGED_SOURCE = "builtin"
 
 _DATE_SUFFIX = re.compile(r"-\d{8}$")
 _BRACKET_SUFFIX = re.compile(r"\[[^\]]*\]$")
 _MODEL_ID = re.compile(r"^claude-([a-z]+)((?:-\d+)*)$")
+_BARE_ALIAS = re.compile(r"^claude-([a-z]+)$")
 
 
 @dataclass(frozen=True)
@@ -61,20 +65,18 @@ def _family(key: str) -> str | None:
 
 
 def resolve_model(raw: str, models: Mapping[str, Mapping[str, float]]) -> str | None:
-    """Exact match after normalization, else the newest model of the same family whose
-    version starts with the given one (so `opus` and `claude-opus-5` map to the latest)."""
+    """Exact match after normalization. Only a version-less alias (`opus`, `claude-sonnet`)
+    falls back to the newest model of that family; a versioned id that is not in the table
+    stays unpriced rather than borrowing another version's price."""
     if not raw:
         return None
     name = normalize_model_id(raw)
     if name in models:
         return name
-    family, wanted = _family(name), _version(name)
-    if family is None or wanted is None:
+    alias = _BARE_ALIAS.match(name)
+    if alias is None:
         return None
-    candidates = [
-        key for key in models
-        if _family(key) == family and (_version(key) or ())[: len(wanted)] == wanted
-    ]
+    candidates = [key for key in models if _family(key) == alias.group(1)]
     return max(candidates, key=lambda key: _version(key) or ()) if candidates else None
 
 
@@ -87,6 +89,11 @@ def _validated_models(raw_models: Mapping[str, object], origin: str) -> dict[str
         if missing:
             raise ValueError(f"{origin}: model '{key}' is missing numeric fields {missing}")
         prices = {field: float(entry[field]) for field in PRICE_FIELDS}
+        one_hour = entry.get(CACHE_WRITE_1H_FIELD)
+        if one_hour is not None and not isinstance(one_hour, (int, float)):
+            raise ValueError(f"{origin}: model '{key}' field '{CACHE_WRITE_1H_FIELD}' must be numeric")
+        derived = prices["input"] * CACHE_WRITE_1H_INPUT_MULTIPLIER
+        prices = {**prices, CACHE_WRITE_1H_FIELD: float(one_hour) if one_hour is not None else derived}
         result[normalize_model_id(key)] = MappingProxyType(prices)
     return result
 
@@ -111,8 +118,15 @@ def load_prices(override_path: str | None = None) -> PriceTable:
 
 
 def cost_usd(tokens: Mapping[str, int], rate: Mapping[str, float] | None) -> float:
-    """USD cost of a usage dict (transcript usage keys) at a per-million-token rate; None rate = 0."""
+    """USD cost of a usage dict (transcript usage keys) at a per-million-token rate; None rate = 0.
+
+    `cache_creation_1h_input_tokens` (part of the cache_creation total) is priced at the 1-hour
+    rate; the rest of the cache_creation total at the 5-minute rate."""
     if rate is None:
         return 0.0
-    total = sum(int(tokens.get(key, 0) or 0) * rate[field] for key, field in TOKEN_PRICE_FIELD.items())
-    return total / TOKENS_PER_UNIT
+    plain = sum(int(tokens.get(key, 0) or 0) * rate[field] for key, field in TOKEN_PRICE_FIELD.items())
+    write_total = int(tokens.get(CACHE_WRITE_TOTAL_KEY, 0) or 0)
+    write_1h = min(int(tokens.get(CACHE_WRITE_1H_KEY, 0) or 0), write_total)
+    one_hour_rate = rate.get(CACHE_WRITE_1H_FIELD, rate["input"] * CACHE_WRITE_1H_INPUT_MULTIPLIER)
+    writes = (write_total - write_1h) * rate["cache_write"] + write_1h * one_hour_rate
+    return (plain + writes) / TOKENS_PER_UNIT

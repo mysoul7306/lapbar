@@ -15,12 +15,16 @@ WORKFLOW_DIR = "workflows"
 ROLE_HEAD = "head"
 ROLE_SUBAGENT = "subagent"
 EFFORT_UNSET = "unset"
-TOKEN_KEYS = (
+USAGE_KEYS = (
     "input_tokens",
     "cache_creation_input_tokens",
     "cache_read_input_tokens",
     "output_tokens",
 )
+# Derived: the 1-hour TTL part of cache_creation_input_tokens (0 when the split is absent).
+CACHE_WRITE_1H_KEY = "cache_creation_1h_input_tokens"
+TOKEN_KEYS = (*USAGE_KEYS, CACHE_WRITE_1H_KEY)
+OUTPUT_INDEX = USAGE_KEYS.index("output_tokens")
 
 
 @dataclass(frozen=True)
@@ -31,7 +35,7 @@ class Record:
     session: str
     effort: str
     timestamp: str
-    tokens: tuple[int, int, int, int]
+    tokens: tuple[int, ...]
 
     def usage(self) -> dict[str, int]:
         return dict(zip(TOKEN_KEYS, self.tokens))
@@ -58,7 +62,7 @@ def classify(relative: Path) -> FileOrigin:
     <project>/<session>/subagents/workflows/*/agent-*.jsonl -> subagent + workflow
     """
     parts = relative.parts
-    if SUBAGENT_DIR in parts[:-1]:
+    if _is_subagent(relative):
         index = parts.index(SUBAGENT_DIR)
         session = "/".join(parts[:index]) or relative.stem
         workflow = WORKFLOW_DIR in parts[index + 1:-1]
@@ -88,7 +92,14 @@ def list_transcripts(projects_dir: Path, since: str | None) -> FileListing:
                     skipped += 1
                     continue
                 kept.append(path)
-    return FileListing(files=tuple(sorted(kept)), skipped_by_mtime=skipped)
+    # Session files first, so a request id seen in both a session file and a subagent file
+    # is counted as head (plain Path ordering would put `s1/subagents/...` before `s1.jsonl`).
+    ordered = sorted(kept, key=lambda path: (_is_subagent(path.relative_to(projects_dir)), str(path)))
+    return FileListing(files=tuple(ordered), skipped_by_mtime=skipped)
+
+
+def _is_subagent(relative: Path) -> bool:
+    return SUBAGENT_DIR in relative.parts[:-1]
 
 
 def _parse_assistant(raw: bytes) -> dict | None:
@@ -117,6 +128,8 @@ def to_record(obj: dict, origin: FileOrigin, since: str | None, until: str | Non
     if not _in_range(timestamp, since, until):
         return None
     usage = message.get("usage") or {}
+    split = usage.get("cache_creation") or {}
+    one_hour = int(split.get("ephemeral_1h_input_tokens") or 0) if isinstance(split, dict) else 0
     return Record(
         model=model,
         role=origin.role,
@@ -124,7 +137,7 @@ def to_record(obj: dict, origin: FileOrigin, since: str | None, until: str | Non
         session=origin.session,
         effort=obj.get("effort") or EFFORT_UNSET,
         timestamp=timestamp,
-        tokens=tuple(int(usage.get(key) or 0) for key in TOKEN_KEYS),
+        tokens=(*(int(usage.get(key) or 0) for key in USAGE_KEYS), one_hour),
     )
 
 
@@ -149,7 +162,7 @@ def _read_file(path: Path, origin: FileOrigin, since: str | None, until: str | N
                 yield None, record
                 continue
             previous = by_request.get(key)
-            if previous is None or record.tokens[3] >= previous.tokens[3]:
+            if previous is None or record.tokens[OUTPUT_INDEX] >= previous.tokens[OUTPUT_INDEX]:
                 # Local accumulator that never escapes this generator; in-place for speed.
                 by_request[key] = record
     yield from by_request.items()

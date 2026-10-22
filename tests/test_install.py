@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from install_fixtures import FAKE_FILES, list_files, make_assets
 
@@ -17,7 +18,8 @@ from beacon import settings_wiring as wiring
 class InstallTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        base = Path(self._tmp.name)
+        base = Path(self._tmp.name).resolve()
+        self.base = base
         self.assets = make_assets(base / "assets")
         self.target = base / "home" / ".claude"
 
@@ -141,14 +143,54 @@ class SettingsMergeTest(InstallTestCase):
         self.assertEqual(len(backups), 1, "second run changes nothing, so no second backup")
         self.assertEqual(backups[0].read_bytes(), original)
 
-    def test_command_already_under_other_matcher_is_skipped(self) -> None:
+    def test_command_under_other_matcher_is_not_counted(self) -> None:
         guard_cmd = wiring.hook_command(self.target, "hooks/guard.py")
         self.write_settings({"hooks": {"PreToolUse": [
             {"matcher": "Bash|Write", "hooks": [{"type": "command", "command": guard_cmd}]}]}})
         result = self.install()
         wired = [r for r in result.rows if "[PreToolUse" in r.item]
+        self.assertEqual(wired[0].status, inst.WIRED)
+        matchers = [e["matcher"] for e in self.settings()["hooks"]["PreToolUse"]]
+        self.assertEqual(matchers, ["Bash|Write", "Bash"])
+
+    def test_home_relative_wiring_counts_as_wired(self) -> None:
+        hand_written = {"type": "command", "command": "python3 ~/.claude/hooks/guard.py"}
+        self.write_settings({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [hand_written]},
+            {"matcher": "Bash", "hooks": [{"type": "command",
+                                           "command": "python3 $HOME/.claude/hooks/x.py"}]}]}})
+        with mock.patch.dict(os.environ, {"HOME": str(self.base / "home")}):
+            result = self.install()
+        wired = [r for r in result.rows if "[PreToolUse" in r.item]
         self.assertEqual(wired[0].status, inst.SAME)
-        self.assertEqual(len(self.settings()["hooks"]["PreToolUse"]), 1)
+        entries = self.settings()["hooks"]["PreToolUse"]
+        self.assertEqual(entries[0]["hooks"], [hand_written], "no second guard entry")
+        self.assertEqual(len(entries[1]["hooks"]), 1)
+
+    def test_malformed_hooks_shape_aborts_before_copying(self) -> None:
+        shapes = ({"hooks": None}, {"hooks": []}, {"hooks": {"PreToolUse": {"matcher": "Bash"}}})
+        self.write_settings({})
+        for shape in shapes:
+            for dry_run in (False, True):
+                with self.subTest(shape=shape, dry_run=dry_run):
+                    (self.target / "settings.json").write_text(json.dumps(shape), encoding="utf-8")
+                    result = self.install(dry_run=dry_run)
+                    self.assertEqual(result.exit_code, 1)
+                    self.assertEqual([r.status for r in result.rows], [inst.ERROR])
+                    self.assertEqual(list_files(self.target), ["settings.json"])
+
+    def test_symlinked_settings_is_written_through(self) -> None:
+        real = self.base / "dotfiles" / "settings.json"
+        real.parent.mkdir()
+        real.write_text('{"model": "x"}\n', encoding="utf-8")
+        self.target.mkdir(parents=True)
+        (self.target / "settings.json").symlink_to(real)
+        self.install()
+        link = self.target / "settings.json"
+        self.assertTrue(link.is_symlink(), "link must stay a link")
+        data = json.loads(real.read_text(encoding="utf-8"))
+        self.assertEqual(data["model"], "x")
+        self.assertIn("PreToolUse", data["hooks"])
+        self.assertEqual(len(self.backups()), 1)
 
     def test_backup_and_new_settings_are_owner_only(self) -> None:
         self.install(categories=("hooks",))
@@ -176,6 +218,59 @@ class SettingsMergeTest(InstallTestCase):
         result = self.install()
         self.assertEqual(result.exit_code, 1)
         self.assertEqual(list_files(self.target), ["settings.json"])
+
+
+class SafetyTest(InstallTestCase):
+    def test_force_backs_up_the_file_it_overwrites(self) -> None:
+        self.install()
+        rule = self.target / "rules/a.md"
+        rule.write_text("# my own edits\n", encoding="utf-8")
+        rule.chmod(0o640)
+        result = self.install(force=True)
+        backups = sorted(rule.parent.glob("a.md.bak-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(encoding="utf-8"), "# my own edits\n")
+        self.assertEqual(backups[0].stat().st_mode & 0o777, 0o600)
+        row = next(r for r in result.rows if r.item == "rules/a.md")
+        self.assertIn(backups[0].name, row.detail)
+        self.assertEqual(rule.read_text(encoding="utf-8"), FAKE_FILES["rules/a.md"])
+
+    def test_symlink_destinations_are_left_untouched_even_with_force(self) -> None:
+        outside = self.base / "dotfiles" / "a.md"
+        outside.parent.mkdir()
+        outside.write_text("# dotfiles copy\n", encoding="utf-8")
+        (self.target / "rules").mkdir(parents=True)
+        (self.target / "rules/a.md").symlink_to(outside)
+        (self.target / "commands").mkdir()
+        (self.target / "commands/lane.md").symlink_to(self.base / "nowhere.md")  # dangling
+        result = self.install(force=True)
+        for rel in ("rules/a.md", "commands/lane.md"):
+            row = next(r for r in result.rows if r.item == rel)
+            self.assertEqual((row.status, row.detail), (inst.DIFFERS, "symlink, left untouched"))
+            self.assertTrue((self.target / rel).is_symlink())
+        self.assertEqual(outside.read_text(encoding="utf-8"), "# dotfiles copy\n")
+        self.assertFalse((self.base / "nowhere.md").exists())
+        self.assertEqual(sorted(outside.parent.iterdir()), [outside], "no backup next to the link target")
+
+    def test_relative_target_is_wired_as_absolute_path(self) -> None:
+        cwd = os.getcwd()
+        os.chdir(self.base)
+        try:
+            inst.install(Path("home/.claude"), assets_root=self.assets)
+        finally:
+            os.chdir(cwd)
+        command = self.settings()["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        self.assertEqual(command, f"python3 {self.target}/hooks/guard.py")
+
+    def test_target_needing_shell_quoting_is_refused(self) -> None:
+        for name in ("my claude", "it's"):
+            with self.subTest(name=name):
+                target = self.base / name / ".claude"
+                for dry_run in (False, True):
+                    result = inst.install(target, assets_root=self.assets, dry_run=dry_run)
+                    self.assertEqual(result.exit_code, 1)
+                    self.assertEqual([r.status for r in result.rows], [inst.ERROR])
+                self.assertFalse((self.base / name).exists())
 
 
 class DryRunTest(InstallTestCase):

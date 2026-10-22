@@ -36,7 +36,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
 
 
 def run(args: argparse.Namespace) -> int:
-    target = Path(args.target).expanduser()
+    target = Path(args.target).expanduser().resolve()
     checks = diagnose(target)
     print(f"beacon doctor -> {target}")
     print(format_table(HEADERS, [(c.kind, c.item, c.result, c.detail) for c in checks]))
@@ -52,6 +52,7 @@ def exit_code(checks: tuple[Check, ...]) -> int:
 def diagnose(target: Path, assets_root: AssetRoot | None = None,
              python: str | None = None) -> tuple[Check, ...]:
     """Run every check. `python` overrides the interpreter used for self-tests."""
+    target = target.expanduser().resolve()  # same absolute form install wires
     manifest = asset_mod.load_manifest(assets_root)
     hooks = tuple(a for a in manifest if a.is_hook)
     exist = tuple(_check_exists(a, target) for a in manifest)
@@ -76,11 +77,9 @@ def _check_wiring(hooks: tuple[Asset, ...], target: Path) -> tuple[Check, ...]:
 
 def _wiring_check(hook: Asset, settings: dict, target: Path) -> Check:
     command = wiring.hook_command(target, hook.dst)
-    try:
-        ok = wiring.is_wired(settings, hook.event, command)
-    except wiring.SettingsError as exc:
-        return Check("wiring", hook.dst, FAIL, _short(str(exc)))
-    detail = hook.event if ok else f"command not found under hooks.{hook.event}"
+    ok = wiring.is_wired(settings, hook.event, hook.matcher, command)
+    where = f"hooks.{hook.event} [{hook.matcher or '*'}]"
+    detail = where if ok else f"command not found under {where}"
     return Check("wiring", hook.dst, PASS if ok else FAIL, _short(detail))
 
 

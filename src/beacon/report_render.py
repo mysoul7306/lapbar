@@ -60,11 +60,21 @@ def _overview(report: Mapping) -> list[str]:
 
 def _counterfactual(report: Mapping) -> list[str]:
     cf = report["counterfactual"]
+    inferred = " (inferred)" if report.get("head_model_source") == "inferred" else ""
     return [
-        f"Counterfactual: every subagent token priced as {report['head_model']}",
+        f"Counterfactual: every subagent token priced as {report['head_model']}{inferred}",
         f"  actual      {_money(cf['actual_usd']):>{NUMBER_WIDTH}}",
         f"  if_all_head {_money(cf['if_all_head_usd']):>{NUMBER_WIDTH}}",
-        f"  saved       {_money(cf['saved_usd']):>{NUMBER_WIDTH}}  ({cf['saved_pct']:.1f}%)",
+        f"  saved       {_money(cf['saved_usd']):>{NUMBER_WIDTH}}  "
+        f"({cf['saved_pct_of_if_all_head']:.1f}% of if_all_head, {cf['saved_pct_of_actual']:.1f}% of actual)",
+    ]
+
+
+def _cache_write(report: Mapping) -> list[str]:
+    split = report["cache_write"]
+    return [
+        f"Cache writes: 5m {split['tokens_5m']:,} tokens, 1h {split['tokens_1h']:,} tokens "
+        f"({split['share_1h_pct']:.1f}% 1h, priced at input x 2)"
     ]
 
 
@@ -95,6 +105,7 @@ def render_text(report: Mapping) -> str:
         _table("Subagent requests", models["subagent"], width),
         [f"Workflow subset: {report['workflow']['requests']:,} requests, {_money(report['workflow']['cost_usd'])}"],
         _counterfactual(report),
+        _cache_write(report),
         _effort(report),
         [f"Summary: {report['summary']}"],
         _footer(report),

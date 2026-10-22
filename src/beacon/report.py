@@ -10,23 +10,33 @@ import sys
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable, Mapping
 
 from beacon import report_render
 from beacon.pricing import PriceTable, cost_usd, load_prices
-from beacon.transcripts import ROLE_HEAD, ROLE_SUBAGENT, TOKEN_KEYS, Record, iter_records, list_transcripts
+from beacon.transcripts import (
+    CACHE_WRITE_1H_KEY,
+    ROLE_HEAD,
+    ROLE_SUBAGENT,
+    TOKEN_KEYS,
+    Record,
+    iter_records,
+    list_transcripts,
+)
 
 DEFAULT_PROJECTS_DIR = "~/.claude/projects"
-DEFAULT_HEAD_MODEL = "claude-fable-5-1"
 EXIT_USAGE_ERROR = 2
+HEAD_SOURCE_ARGUMENT = "argument"
+HEAD_SOURCE_INFERRED = "inferred"
+CACHE_WRITE_5M_KEY = "cache_creation_5m_input_tokens"
 
 
 @dataclass(frozen=True)
 class Usage:
     requests: int = 0
-    tokens: tuple[int, ...] = (0, 0, 0, 0)
+    tokens: tuple[int, ...] = (0,) * len(TOKEN_KEYS)
 
     def add(self, tokens: tuple[int, ...]) -> "Usage":
         return Usage(self.requests + 1, tuple(a + b for a, b in zip(self.tokens, tokens)))
@@ -46,12 +56,12 @@ class Totals:
 
 
 def iso_date(value: str) -> str:
-    """argparse type: validate YYYY-MM-DD and return it unchanged."""
+    """argparse type: strictly YYYY-MM-DD (rejects 20261013 and friends), returned zero-padded."""
     try:
-        date.fromisoformat(value)
+        parsed = datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, got '{value}'") from exc
-    return value
+    return parsed.isoformat()
 
 
 def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
@@ -64,7 +74,11 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
     parser.add_argument("--projects-dir", default=DEFAULT_PROJECTS_DIR, help=f"default {DEFAULT_PROJECTS_DIR}")
     parser.add_argument("--since", type=iso_date, help="first day to include (YYYY-MM-DD, UTC)")
     parser.add_argument("--until", type=iso_date, help="last day to include (YYYY-MM-DD, UTC)")
-    parser.add_argument("--head", default=DEFAULT_HEAD_MODEL, help=f"head model for the counterfactual (default {DEFAULT_HEAD_MODEL})")
+    parser.add_argument(
+        "--head",
+        help="head model for the counterfactual (default: inferred as the priced model with the "
+        "highest head-session cost)",
+    )
     parser.add_argument("--prices", help="JSON price file that adds or replaces models in the packaged table")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     parser.set_defaults(func=run)
@@ -105,10 +119,12 @@ def _model_rows(totals: Totals, role: str, prices: PriceTable) -> list[dict]:
         if row_role != role:
             continue
         rate = prices.rate(model)
+        tokens = usage.as_dict()
         rows.append({
             "model": model,
             "requests": usage.requests,
-            **usage.as_dict(),
+            **tokens,
+            CACHE_WRITE_5M_KEY: tokens["cache_creation_input_tokens"] - tokens[CACHE_WRITE_1H_KEY],
             "cost_usd": round(cost_usd(usage.as_dict(), rate), 4),
             "priced": rate is not None,
         })
@@ -128,12 +144,36 @@ def counterfactual(totals: Totals, prices: PriceTable, head_model: str) -> dict[
         repriced = role == ROLE_SUBAGENT and rate is not None
         if_all_head += cost_usd(usage.as_dict(), head_rate) if repriced else cost
     saved = if_all_head - actual
-    pct = (saved / if_all_head * 100) if if_all_head > 0 else 0.0
     return {
         "actual_usd": round(actual, 4),
         "if_all_head_usd": round(if_all_head, 4),
         "saved_usd": round(saved, 4),
-        "saved_pct": round(pct, 1),
+        "saved_pct_of_if_all_head": round(_pct(saved, if_all_head), 1),
+        "saved_pct_of_actual": round(_pct(saved, actual), 1),
+    }
+
+
+def _pct(part: float, whole: float) -> float:
+    return part / whole * 100 if whole > 0 else 0.0
+
+
+def infer_head_model(totals: Totals, prices: PriceTable) -> str | None:
+    """The priced model with the highest head-session cost, as a price-table key."""
+    costs: dict[str, float] = {}
+    for (role, model), usage in totals.by_role_model.items():
+        key = prices.resolve(model)
+        if role == ROLE_HEAD and key is not None:
+            costs = {**costs, key: costs.get(key, 0.0) + cost_usd(usage.as_dict(), prices.models[key])}
+    return max(costs, key=lambda key: (costs[key], key)) if costs else None
+
+
+def _cache_write_split(totals: Totals) -> dict:
+    total = sum(usage.as_dict()["cache_creation_input_tokens"] for usage in totals.by_role_model.values())
+    one_hour = sum(usage.as_dict()[CACHE_WRITE_1H_KEY] for usage in totals.by_role_model.values())
+    return {
+        "tokens_5m": total - one_hour,
+        "tokens_1h": one_hour,
+        "share_1h_pct": round(_pct(one_hour, total), 1),
     }
 
 
@@ -156,22 +196,33 @@ def _workflow_summary(totals: Totals, prices: PriceTable) -> dict:
     return {"requests": requests, "cost_usd": round(cost, 4)}
 
 
-def summary_line(cf: Mapping[str, float], head_model: str, days: int) -> str:
+def summary_line(cf: Mapping[str, float], head_model: str, days: int, unpriced: int = 0) -> str:
+    """README line; the percentage is relative to the all-on-head cost."""
     saved = cf["saved_usd"]
     verb = f"saved ${saved:,.2f}" if saved >= 0 else f"cost ${-saved:,.2f} more"
+    excluded = f" ({unpriced} unpriced models excluded)" if unpriced else ""
     return (
-        f"subagents on cheaper models {verb} ({abs(cf['saved_pct']):.1f}%) vs running everything "
-        f"on {head_model} over {days} days [list-price estimate]"
+        f"subagents on cheaper models {verb} ({abs(cf['saved_pct_of_if_all_head']):.1f}%) vs running "
+        f"everything on {head_model} over {days} days [list-price estimate]{excluded}"
     )
 
 
-def build_report(totals: Totals, prices: PriceTable, head_model: str, since: str | None, until: str | None) -> dict:
-    """Plain-data report; the JSON output and the text renderer both read this."""
+def build_report(
+    totals: Totals,
+    prices: PriceTable,
+    head: tuple[str, str],
+    since: str | None,
+    until: str | None,
+) -> dict:
+    """Plain-data report; the JSON output and the text renderer both read this.
+    `head` = (price-table key, source: "argument" | "inferred")."""
+    head_model, head_source = head
     head_rows = _model_rows(totals, ROLE_HEAD, prices)
     sub_rows = _model_rows(totals, ROLE_SUBAGENT, prices)
     period = _period(totals, since, until)
     cf = counterfactual(totals, prices, head_model)
     workflow = _workflow_summary(totals, prices)
+    unpriced = sorted({row["model"] for row in head_rows + sub_rows if not row["priced"]})
     head_requests = sum(row["requests"] for row in head_rows)
     sub_requests = sum(row["requests"] for row in sub_rows)
     return {
@@ -186,13 +237,15 @@ def build_report(totals: Totals, prices: PriceTable, head_model: str, since: str
             "workflow": workflow["requests"],
         },
         "head_model": head_model,
+        "head_model_source": head_source,
         "prices": {"as_of": prices.as_of, "source": prices.source, "note": prices.note},
         "models": {"head": head_rows, "subagent": sub_rows},
         "workflow": workflow,
         "counterfactual": cf,
+        "cache_write": _cache_write_split(totals),
         "subagent_effort": _effort_shares(totals.effort),
-        "unpriced_models": sorted({row["model"] for row in head_rows + sub_rows if not row["priced"]}),
-        "summary": summary_line(cf, head_model, period["days"]),
+        "unpriced_models": unpriced,
+        "summary": summary_line(cf, head_model, period["days"], len(unpriced)),
     }
 
 
@@ -201,27 +254,43 @@ def _warn_unpriced(models: Iterable[str]) -> None:
         print(f"WARN: no price for model '{model}'; costed as $0 and marked [unpriced]", file=sys.stderr)
 
 
+def _fail(message: str) -> int:
+    print(f"ERROR: {message}", file=sys.stderr)
+    return EXIT_USAGE_ERROR
+
+
+def _choose_head(args: argparse.Namespace, totals: Totals, prices: PriceTable) -> tuple[str, str] | str:
+    """(model, source) or an error message."""
+    if args.head:
+        explicit = prices.resolve(args.head)
+        if explicit is None:
+            return f"head model '{args.head}' has no price entry"
+        return explicit, HEAD_SOURCE_ARGUMENT
+    inferred = infer_head_model(totals, prices)
+    if inferred is None:
+        return "no priced head-session requests in range to infer the head model; pass --head"
+    return inferred, HEAD_SOURCE_INFERRED
+
+
 def run(args: argparse.Namespace) -> int:
     started = time.monotonic()
     if args.since and args.until and args.since > args.until:
-        print("ERROR: --since is after --until", file=sys.stderr)
-        return EXIT_USAGE_ERROR
+        return _fail("--since is after --until")
     try:
         prices = load_prices(args.prices)
     except (OSError, ValueError) as exc:
-        print(f"ERROR: cannot load prices: {exc}", file=sys.stderr)
-        return EXIT_USAGE_ERROR
-    head_model = prices.resolve(args.head)
-    if head_model is None:
-        print(f"ERROR: head model '{args.head}' has no price entry", file=sys.stderr)
-        return EXIT_USAGE_ERROR
+        return _fail(f"cannot load prices: {exc}")
+    if args.head and prices.resolve(args.head) is None:
+        return _fail(f"head model '{args.head}' has no price entry")
     projects_dir = Path(args.projects_dir).expanduser()
     if not projects_dir.is_dir():
-        print(f"ERROR: projects dir not found: {projects_dir}", file=sys.stderr)
-        return EXIT_USAGE_ERROR
+        return _fail(f"projects dir not found: {projects_dir}")
     listing = list_transcripts(projects_dir, args.since)
     totals = aggregate(iter_records(projects_dir, listing.files, args.since, args.until))
-    report = build_report(totals, prices, head_model, args.since, args.until)
+    head = _choose_head(args, totals, prices)
+    if isinstance(head, str):
+        return _fail(head)
+    report = build_report(totals, prices, head, args.since, args.until)
     _warn_unpriced(report["unpriced_models"])
     scan = {
         "files_read": len(listing.files),
