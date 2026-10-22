@@ -16,7 +16,7 @@ beacon report --since 2026-10-13  # your own savings, from your own transcripts
 
 Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 것** 이다. 파일 훑기, 리뷰 렌즈, 수집 같은 서브에이전트 작업은 더 싼 모델로도 품질이 같은데, `Agent` / `Workflow` 호출에 model 을 안 적으면 머리 모델을 그대로 상속한다. 그래서 hook 으로 막았다.
 
-- **model, effort 는 리터럴로** — `subagent-model-guard.py` 가 `Agent`, `Task`, `Workflow` 호출에서 model 생략, 변수, 삼항식을 거부하고 (deny), 최상위 모델은 그 호출 안에 `[owner-approved: fable]` 표지가 있을 때만 허용한다. effort 도 같은 규칙 (low / medium / high / xhigh 리터럴).
+- **model, effort 는 리터럴로** — `subagent-model-guard.py` 가 `Agent`, `Task`, `Workflow` 호출에서 model 생략, 변수, 삼항식을 거부하고 (deny), 최상위 모델 (fable) 과 최하위 모델 (haiku, 품질 사고 전례로 기본 차단) 은 그 호출 안에 `[owner-approved: <모델>]` 표지가 있을 때만 허용한다. effort 도 같은 규칙 (low / medium / high / xhigh 리터럴). 허용 모델 이름은 hook 의 `TIERS` 표 하나에서 바꾼다.
 - **레인 루프** — `/lane` (머리는 해독, 분해, 종합만; read 는 opus high, collect 는 sonnet low, refute 는 opus xhigh) 과 `/review-lane` (렌즈 3 → 반박자 2, agent 상한 10) 이 그 배분을 절차로 굳힌다.
 - **보호 브랜치 push 차단** — `git-push-guard.py` 가 develop / main / master 로 가는 push 를 refspec, upstream 까지 풀어 판정하고 못 풀면 fail-closed 로 막는다. 머지는 AI 가, push 는 사람이.
 - **메모리 위생** — `memory-lint-hook.py` 가 세션 시작 때 메모리 디렉토리의 깨진 링크, 공인 IP, 비밀값, 라우터 크기를 점검한다.
@@ -29,16 +29,18 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 
 | 항목 | 값 |
 |---|---|
-| 요청 수 | 15,777 (머리 6,415, 서브에이전트 9,362, 그중 workflow 8,031) |
-| 실제 비용 (list price 추정) | $2,514.70 |
-| 서브에이전트까지 전부 머리 모델이었다면 | $3,520.82 |
-| **절감** | **$1,006.12 (28.6%)** |
+| 요청 수 | 16,051 (머리 6,501, 서브에이전트 9,550, 그중 workflow 8,031) |
+| 실제 비용 (list price 추정) | $2,897.65 |
+| 서브에이전트까지 전부 머리 모델이었다면 | $3,929.62 |
+| **절감** | **$1,031.97** — 가정 비용 대비 26.3%, 실제 지출 대비 35.6% |
 | 서브에이전트 effort | high 65%, xhigh 33%, medium 2% |
+| 캐시 쓰기 중 1시간 TTL 비중 | 40% (1시간 쓰기는 input 단가 × 2 로 계산) |
 
-서브에이전트 요청의 97% 가 opus 로 돌았고 (fable 2%, opus 4.8 1%), 그 차액이 전부다. 머리 쪽 비용 ($1,507) 은 건드리지 않은 숫자라 "총액의 28.6%" 는 보수적인 표현이다 (서브에이전트 몫만 보면 $1,008 → $2,014, 절반).
+서브에이전트 요청의 97% 가 opus 로 돌았고 (fable 2%, opus 4.8 1%), 절감액은 그 단가 차이다. 머리 쪽 비용 ($1,507 안팎) 은 건드리지 않은 숫자라 서브에이전트 몫만 보면 비용이 절반 아래로 내려간다.
 
 - 단가는 공개 list price (`src/beacon/prices.json`, 기준일 명시) × 토큰이라 **추정치** 다 (실청구가 아니다). `--prices` 로 바꿀 수 있다.
-- 같은 requestId 는 한 번만 센다 (한 응답이 content block 마다 레코드를 남긴다). `<synthetic>` 은 제외.
+- 같은 requestId 는 한 번만 센다 (한 응답이 content block 마다 레코드를 남긴다, output 이 가장 큰 레코드 채택). `<synthetic>` 은 제외. 머리/서브에이전트 분류는 파일 경로 (`<세션>.jsonl` vs `subagents/`) 기준이라 2026-10 이후 transcript 구조를 전제한다.
+- 머리 모델은 `--head` 로 주거나, 없으면 머리 쪽에서 비용이 가장 큰 모델로 추론한다 (출력에 `inferred` 표시).
 - 자기 숫자를 보려면 `beacon report --json > report.json` 으로 뽑아 두면 된다.
 
 ## 설치 뒤 생기는 것
@@ -60,6 +62,8 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 
 ## 쓰는 법 (짧게)
 
+전제: `Agent` 툴에 `effort` 파라미터가 있고 `Workflow` 툴이 있는 Claude Code (2026-10 기준 최신). 없는 판에서는 model 가드만 쓰고 `/lane`, `/review-lane` 은 건너뛴다.
+
 1. `beacon install` → Claude Code 재시작
 2. 서브에이전트를 부를 때 model 과 effort 를 적는다. 안 적으면 hook 이 막고 이유를 보여 준다
 3. 리뷰는 `/review-lane`, 긴 작업은 `/lane` 으로
@@ -69,7 +73,7 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 
 ## 공개본에서 뺀 것
 
-이 저장소의 hook, rules 는 한 사람의 라이브 `~/.claude` 에서 **`beacon bundle`** 로 추출한 것이다. 치환 표 (`scrub_map.json`) 는 원문을 담고 있어 저장소 밖 (`$BEACON_SCRUB_MAP`) 에만 있고, 공개 코드에는 digest 로만 들어 있다. 추출 때 호칭, 실명, 계정, 홈 경로, 프로젝트와 회사 이름, 벤더, wrapper 이름, IP, 토큰 패턴을 치환하거나 뺐고, `beacon bundle --check` 가 CI 게이트로 그 흔적 0건을 확인한다. 외부 접근 기록 hook (trust-ledger) 은 회사 wrapper 표와 결합이 커서 다음 판에 넣는다.
+이 저장소의 hook, rules 는 한 사람의 라이브 `~/.claude` 에서 **`beacon bundle`** 로 추출한 것이다. 치환 표 (`scrub_map.json`) 는 원문을 담고 있어 저장소 밖 (`$BEACON_SCRUB_MAP`) 에만 있고, 공개 코드에는 digest 로만 들어 있다. 추출 때 호칭, 실명, 계정, 홈 경로, 프로젝트와 회사 이름, 벤더, wrapper 이름, IP, 토큰 패턴을 치환하거나 뺐다. `beacon bundle --check` 가 게이트인데, CI 에서는 범용 패턴 (홈 경로, IP, JWT, 자격증명 대입, 메모리 파일 이름) 만 보고, 고유명사 (digest 로만 보관) 와 호칭은 관리자 로컬에서 `--require-map` 으로 확인한다. 외부 접근 기록 hook (trust-ledger) 은 회사 wrapper 표와 결합이 커서 다음 판에 넣는다.
 
 ## 개발
 
@@ -79,7 +83,11 @@ python3 -m unittest discover -s tests
 PYTHONPATH=src python3 -m beacon.cli --help
 ```
 
-의존성 0 (Python 3.11+ 표준 라이브러리만). 라이선스 MIT.
+의존성 0 (Python 3.11+ 표준 라이브러리만).
+
+## 라이선스
+
+**PolyForm Noncommercial 1.0.0** — 개인, 교육, 연구, 비영리 등 비상업 목적이면 자유롭게 쓰고 고치고 나눌 수 있다. 상업 목적 사용은 허용하지 않는다 (별도 허락 필요). OSI 정의의 오픈소스는 아니다. 전문은 `LICENSE`.
 
 ## English summary
 
@@ -87,5 +95,5 @@ PYTHONPATH=src python3 -m beacon.cli --help
 
 ## Credits
 
-- Author and copyright: **Geunrok Kim**
+- Author and copyright: **Geunrok Kim** (license: PolyForm Noncommercial 1.0.0)
 - Co-author: **Claude** (Anthropic) — the hooks, rules and this tool were built together in Claude Code sessions; commits carry a `Co-Authored-By: Claude` trailer.

@@ -114,10 +114,18 @@ def report_hits(hits: tuple[scrub.Hit, ...]) -> int:
     return 1 if lines else 0
 
 
-def run_check(assets_dir: Path, map_path: Path = scrub.MAP_PATH) -> int:
+def run_check(assets_dir: Path, map_path: Path = scrub.MAP_PATH, require_map: bool = False) -> int:
     """Scan the asset directory only; nothing is written. The private map adds owner rules when present."""
-    extra = scrub.load_map(map_path).scan if map_path.is_file() else ()
-    return report_hits(scrub.scan_tree(assets_dir, extra_rules=extra))
+    if map_path.is_file():
+        smap = scrub.load_map(map_path)
+        print(f"owner rules: loaded ({len(smap.terms)} terms, {len(smap.scan)} patterns)")
+    else:
+        if require_map:
+            print(f"owner rules: REQUIRED but absent ({map_path})")
+            return 1
+        smap = scrub.parse_map({})
+        print("owner rules: absent (generic patterns only)")
+    return report_hits(scrub.scan_tree(assets_dir, smap.terms, smap.scan))
 
 
 def run_bundle(live_root: Path, assets_dir: Path, preview: Path | None, map_path: Path) -> int:
@@ -129,7 +137,7 @@ def run_bundle(live_root: Path, assets_dir: Path, preview: Path | None, map_path
     if preview is not None:
         write_all(built, preview)
         print(f"preview written to {preview}")
-    hits = tuple(h for item in built for h in scrub.scan_text(item.text, item.entry.asset, extra_rules=smap.scan))
+    hits = tuple(h for item in built for h in scrub.scan_text(item.text, item.entry.asset, smap.terms, smap.scan))
     if report_hits(hits):
         return 1
     with tempfile.TemporaryDirectory(prefix="beacon-bundle-") as tmp:
@@ -154,6 +162,8 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
 def configure(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--from", dest="from_dir", default="~/.claude", help="live Claude Code directory to read")
     parser.add_argument("--check", action="store_true", help="scan the asset directory only, write nothing")
+    parser.add_argument("--require-map", action="store_true",
+                        help="with --check: fail when the private map (owner rules) is absent")
     parser.add_argument("--assets", default=str(ASSETS_DIR), help="asset directory (default: the package's)")
     parser.add_argument("--preview", default=None, help="also write scrubbed copies here for review")
     parser.add_argument("--map", dest="map_path", default=str(scrub.MAP_PATH),
@@ -163,7 +173,7 @@ def configure(parser: argparse.ArgumentParser) -> None:
 def run(args: argparse.Namespace) -> int:
     assets_dir = Path(args.assets).expanduser()
     if args.check:
-        return run_check(assets_dir, Path(args.map_path).expanduser())
+        return run_check(assets_dir, Path(args.map_path).expanduser(), args.require_map)
     preview = Path(args.preview).expanduser() if args.preview else None
     return run_bundle(Path(args.from_dir).expanduser(), assets_dir, preview, Path(args.map_path).expanduser())
 

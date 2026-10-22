@@ -7,4 +7,4 @@ build/
 .pytest_cache/
 .DS_Store
 report-*.json
-scrub_map.json
+scrub_map*

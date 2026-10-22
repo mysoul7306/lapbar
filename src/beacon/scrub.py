@@ -17,7 +17,7 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Iterator, Mapping
 
@@ -29,43 +29,18 @@ _HANGUL = "가-힣"
 DIGEST_SALT = "beacon-scan:"
 DIGEST_LEN = 20
 
-# digest(term) -> category. Add a term with `term_digest("<term>")`; never commit the plain term.
-HASHED_TERMS: Mapping[str, str] = {
-    "d3d151c1de1c9092840d": "real-name",
-    "07b2bd92d8c71d0aa736": "real-name",
-    "413a4d64c9103601bfce": "real-name",
-    "7c3903757f29e27cbb15": "real-name",
-    "3b679b9b7fddb2723017": "account",
-    "642349625a8c3b4e3520": "account",
-    "8124b5a3b95aa026cff5": "project",
-    "5574f938db5f0aa9f70e": "project",
-    "60f421085c499f80bf37": "project",
-    "37fa92e809c9576c1bcc": "project",
-    "9caaf99ab8a66dcdd75f": "project",
-    "1d070e065a8bfe64ae0d": "project",
-    "25a7d448f64d595a5849": "org",
-    "ed9f26a2786ef18408ef": "org",
-    "860e5401356561116e94": "org",
-    "b11d9db2df7f9928d311": "org",
-    "6159876943a00b86528f": "org",
-    "880f24ff63b0db721ccd": "org",
-    "bfa82fce67fabc75816d": "org",
-    "fa68f0c7b42b11a2d04a": "org",
-    "9bcb7db5f34288c62645": "org",
-    "0f7f59548ed2d76bcaca": "org",
-    "28469e13e54aca88f14d": "org",
-    "d9cccb00eb5cc55417a1": "wrapper",
-    "7308caabfa2f2f26e2eb": "wrapper",
-    "2bd993a147cbeaa47b60": "private-workspace",
-}
+# Owner-specific terms ship only as salted digests, and only in the private map (`terms` section).
+# Add one with `term_digest("<term>")`; never commit the plain term.
+HASHED_TERMS: Mapping[str, str] = {}
 # Hangul terms are matched as substrings of Hangul runs of these lengths.
-HANGUL_TERM_LENGTHS = (2, 4)
+HANGUL_TERM_LENGTHS = (2, 3, 4)
 
 # Pattern categories (generic shapes, safe to publish).
 # The honorific pattern skips words that merely end in the same syllable (common nouns).
 # Owner-specific rules (nickname, honorifics) live in the private map's `scan` section.
 SCAN_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("home-path", re.compile(r"/Users/|/home/[a-z]", re.IGNORECASE)),
+    ("partial-ip", re.compile(r"(?<![\d.])\d{1,3}\.\d{1,3}\.\d{1,3}\.(?:x|\*|<)")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]+\.")),
     ("email", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")),
     ("credential", re.compile(
@@ -94,6 +69,7 @@ class ScrubMap:
     regex: tuple[tuple[re.Pattern[str], str], ...]
     literal: tuple[tuple[str, str], ...]
     scan: tuple[tuple[str, re.Pattern[str]], ...] = ()  # extra scan rules: (category, pattern)
+    terms: Mapping[str, str] = field(default_factory=dict)  # digest -> category
 
 
 @dataclass(frozen=True)
@@ -128,7 +104,8 @@ def parse_map(raw: Mapping) -> ScrubMap:
     regex = tuple((re.compile(r["pattern"]), r["repl"]) for r in raw.get("regex") or ())
     literal = tuple(sorted(((o, n) for o, n in raw.get("literal") or ()), key=lambda p: -len(p[0])))
     scan = tuple((r["category"], re.compile(r["pattern"])) for r in raw.get("scan") or ())
-    return ScrubMap(files=files, regex=regex, literal=literal, scan=scan)
+    terms = dict(raw.get("terms") or {})
+    return ScrubMap(files=files, regex=regex, literal=literal, scan=scan, terms=terms)
 
 
 def load_map(path: Path = MAP_PATH) -> ScrubMap:

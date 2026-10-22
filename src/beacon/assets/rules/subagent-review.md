@@ -5,7 +5,7 @@
 ## 리뷰어는 읽기 전용, 실측은 분리
 - 리뷰, 반증, critic 레인은 사용자 agent **`review-readonly`** (Read, Grep, Glob 만) 로 띄운다 — Workflow 는 `agentType: 'review-readonly'`, 단건 Agent/Task 는 `subagent_type: 'review-readonly'`. Bash 가 없어 셸 실행 권한 프롬프트가 생기지 않는다 (Read 권한 질문은 남을 수 있다).
 - **실측 요구는 유지하고 실행 담당만 나눈다**: 리뷰어가 [실측 요청] (명령, 실행 환경과 전제, 부수효과, 성공/실패 판별) 을 설계해 돌려주면, 부모가 검토한 뒤 직접 (또는 허용 명령을 명시한 sonnet 1개 레인이) 돌리고 결과를 리뷰어에게 되돌린다. 리뷰어 직접 실측은 격리 환경 (컨테이너, 전용 홈) 을 **사용자가 미리 허용한 작업**에서만 general-purpose 로.
-- 2차 의견은 Codex read-only sandbox 를 Claude 검증자보다 먼저 (Claude 한도를 쓰지 않는다).
+- 2차 의견은 (Codex 가 설치돼 있으면) Codex read-only sandbox 를 Claude 검증자보다 먼저 (Claude 한도를 쓰지 않는다).
 
 ## 한 리뷰 라운드의 규모
 - 렌즈 ≤ 3, critic ≤ 1 (opus, fable 은 `[owner-approved: fable]` 표지 때만). 검증은 **지적별 독립 인원** high 2, medium 1, low 0 (low 는 부모 판단). 검증자 1명이 지적 ≤ 4건을 묶어 본다.
@@ -14,7 +14,7 @@
 - 다음 라운드 생략 조건 = 반증 결과가 [고칠 목록] 으로 닫혀 있고 **판단 여지가 없고 기계적으로 검증 가능** (테스트, 잔존 grep 0) 할 때만. 공유 동작 (파서, 권한, 배포 경로) 을 바꾸는 수정은 그 범위만 다시 리뷰.
 
 ## 모델 티어 (hook 이 막는 것)
-- **루프 = 머리 Fable, 손발 하위 모델**: 부모 (Fable) 가 해독, 분해, 종합, 위험 결정의 사용자 확인을 맡고, 레인은 read = opus high, collect = sonnet low (허용 명령 목록이 있을 때만 셸), refute = opus xhigh, 취합 압축 = opus (여기 read 는 렌즈이고, 아래 GUIDE 의 judge·critic xhigh 는 최종 판정자 자리 - 다른 것). 모델 하나로 강제하지 않는다. 절차 = `/lane`, 검수 = `/review-lane`
+- **루프 = 머리 세션 모델, 손발 하위 모델**: 부모 (세션 모델) 가 해독, 분해, 종합, 위험 결정의 사용자 확인을 맡고, 레인은 read = opus high, collect = sonnet low (허용 명령 목록이 있을 때만 셸), refute = opus xhigh, 취합 압축 = opus (여기 read 는 렌즈이고, 아래 GUIDE 의 judge·critic xhigh 는 최종 판정자 자리 - 다른 것). 모델 하나로 강제하지 않는다. 절차 = `/lane`, 검수 = `/review-lane`
 - 모든 Agent/Task 와 workflow `agent()` 에 model 을 **문자열 리터럴**로 (생략, inherit, 변수, 삼항식 deny). 단건 = opus, workflow = opus 기본, sonnet = 기계적 수집·파싱.
 - fable 은 사용자가 그 작업에 명시 허용했을 때만 — 그 호출 안 (label/prompt) 에 `[owner-approved: fable]` 표지, 표지가 있어도 workflow 한 스크립트에 호출 위치 2곳까지 (3곳부터 deny). 루프 1곳이 N번 도는 건 hook 이 못 세니 규모 예고로.
 - haiku 는 사용자가 그 작업에 명시 허용했을 때만 — 그 호출 안 (label/prompt) 에 `[owner-approved: haiku]` 표지. 허용 없이 표지를 적는 건 규칙 위반. hook 이 거부하면 우회하지 말고 고쳐서 다시 부른다.

@@ -39,7 +39,7 @@ GUIDE = (
     "fable 은 사용자가 그 작업에 허용했을 때만 — 그 호출 안에 '[owner-approved: fable]' 표지 (workflow 2곳까지), "
     "haiku 도 '[owner-approved: haiku]' 표지가 있을 때만. "
     "effort 도 리터럴로 (low/medium/high/xhigh, max 는 '[owner-approved: max]' 표지 — 작업 agent high, 기계적 수집 low, judge·critic xhigh. 생략 = 세션 effort 상속). "
-    "한도는 전 모델 공유 (Fable 은 주간 50% 안) — /usage 먼저. 상세 = ~/.claude/rules/subagent-review.md"
+    "한도는 요금제마다 달라 /usage 먼저. 상세 = ~/.claude/rules/subagent-review.md"
 )
 
 TIERS = ("fable", "opus", "sonnet", "haiku")
@@ -51,6 +51,8 @@ EFFORT_CAP_DEFAULT = "xhigh"       # 이 위 단계 (max) 는 그 호출 안의 
 EFFORT_MARK = "[owner-approved: %s]"      # effort 상한 위 단계의 허용 표지 (fable, haiku 표지와 같은 꼴)
 
 AGENT_CALL = re.compile(r'(?<![\w.$])agent\s*\(')
+# agent 를 호출이 아닌 자리 (별칭 대입, 인자, 속성 접근) 에 쓰면 호출 지점을 못 세니 deny (2026-10-22 보안 리뷰).
+AGENT_ALIAS = re.compile(r'(?<![\w$])agent\b(?!\s*\()')
 LITERAL = re.compile(r"""\s*(['"`])([A-Za-z0-9_.\-]+)\1""")         # 값 자리의 문자열 리터럴
 OPT_KEYS = ("model", "effort")                                       # agent() opts 최상위에서 리터럴을 요구하는 키
 
@@ -262,6 +264,10 @@ def agent_calls(script):
     code, end_state = blank_strings_and_comments(script)
     if end_state != "code":
         raise ValueError("닫히지 않은 문자열 또는 주석 — 정규식 리터럴 (/[/*]/ 류) 이면 new RegExp('…') 로 바꿔줘")
+    alias = AGENT_ALIAS.search(code)
+    if alias:
+        raise ValueError("agent 를 호출 말고 다른 자리 (별칭, 인자, 속성) 에 썼어 (script, 줄 %d) — 호출마다 agent(...) 로 직접 써줘"
+                         % (code.count("\n", 0, alias.start()) + 1))
     calls = []
     for m in AGENT_CALL.finditer(code):
         start = m.end()           # '(' 바로 뒤
@@ -434,6 +440,15 @@ def _self_test():
         ("Workflow 두 호출 전부 model → pass",
          wf("const a = await agent('p', {model: 'opus', effort: 'high'})\nconst b = await agent('q', { label: 'x', model: 'sonnet', effort: 'low' })"),
          False, None),
+        ("Workflow agent 별칭 대입 → deny",
+         wf("const run = agent\nconst r = await run('p', {model: 'opus', effort: 'high'})"),
+         True, "별칭"),
+        ("Workflow agent 를 인자로 전달 → deny",
+         wf("const r = await helper(agent, ITEMS)"),
+         True, "별칭"),
+        ("Workflow agentType 키는 별칭 아님 → pass",
+         wf("const r = await agent('p', { agentType: 'review-readonly', model: 'opus', effort: 'high' })"),
+         False, None),
         ("Workflow 둘 중 하나 누락 → deny (줄 2)",
          wf("const a = await agent('p', {model: 'opus', effort: 'high'})\nconst b = await agent('q', { label: 'x', effort: 'high' })"),
          True, "model 이 없어~ (script, 줄 2)"),
@@ -590,11 +605,11 @@ def _self_test():
                   {"tool_name": "Workflow", "tool_input": {"scriptPath": tmp}}, True, "scriptPath"))
     cases.append(("scriptPath 읽기 불가 → deny (fail-closed)",
                   {"tool_name": "Workflow", "tool_input": {"scriptPath": tmp + ".nope"}}, True, "읽을 수 없어"))
-    for token in ("fable", "opus", "sonnet", "haiku", "effort", "생략", "/usage", "50%"):
+    for token in ("fable", "opus", "sonnet", "haiku", "effort", "생략", "/usage"):
         if token not in GUIDE:
             print("FAIL - GUIDE 문구에 %r 가 없다" % token)
             sys.exit(1)
-    print("PASS - GUIDE 문구 토큰 8종 확인 (fable/opus/sonnet/haiku/effort/생략//usage/50%%), 길이 %d자" % len(GUIDE))
+    print("PASS - GUIDE 문구 토큰 7종 확인 (fable/opus/sonnet/haiku/effort/생략//usage), 길이 %d자" % len(GUIDE))
     failed = 0
 
     def run(name, payload, expect_deny, must_contain):

@@ -56,6 +56,7 @@ class ScanTest(unittest.TestCase):
         scrub.term_digest("zz-proj-x"): "project",
         scrub.term_digest("zz_user"): "account",
         scrub.term_digest("가나다라"): "real-name",
+        scrub.term_digest("마바사"): "real-name",
         scrub.term_digest("zzwrap"): "wrapper",
         scrub.term_digest("zz-private"): "private-workspace",
     }
@@ -70,6 +71,7 @@ class ScanTest(unittest.TestCase):
             "memory-slug": "global feedback_some_slug",
             "public-ip": "host 198.51.100.7",
             "internal-ip": "host 10.1.2.3",
+            "partial-ip": "gw 203.0.113.x 로 접속",
         }
         for category, line in samples.items():
             with self.subTest(category=category):
@@ -88,19 +90,11 @@ class ScanTest(unittest.TestCase):
             with self.subTest(category=category):
                 self.assertEqual(categories(line, terms=self.FAKE_TERMS), {category})
 
+    def test_three_syllable_hangul_term_matches(self):
+        self.assertEqual(categories("담당 마바사 님", terms=self.FAKE_TERMS), {"real-name"})
+
     def test_hashed_terms_respect_word_atoms(self):
         self.assertEqual(categories("zzacmex and xzzacme", terms=self.FAKE_TERMS), set())
-
-    def test_builtin_digests_cover_every_hashed_category(self):
-        self.assertEqual(set(scrub.HASHED_TERMS.values()),
-                         {"real-name", "account", "project", "org", "wrapper", "private-workspace"})
-
-    def test_builtin_real_name_and_its_exemption(self):
-        line = "Copyright " + "Geun" + "rok Kim"
-        self.assertIn("real-name", categories(line, "rules/x.md"))
-        self.assertNotIn("real-name", categories(line, "LICENSE"))
-        self.assertNotIn("real-name", categories(line, "README.md"))
-        self.assertNotIn("real-name", categories(line, "pyproject.toml"))
 
     def test_clean_text_is_negative(self):
         text = "\n".join([
