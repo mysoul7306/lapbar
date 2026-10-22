@@ -22,6 +22,7 @@ FAKE_MANIFEST = {
     "scripts": [{"src": "scripts/lint.py", "dst": "scripts/lint.py"}],
     "rules": [{"src": "rules/a.md", "dst": "rules/a.md"}],
     "skills": [{"src": "commands/lane.md", "dst": "commands/lane.md"}],
+    "agents": [{"src": "agents/reviewer.md", "dst": "agents/reviewer.md"}],
 }
 
 FAKE_FILES = {
@@ -30,6 +31,7 @@ FAKE_FILES = {
     "scripts/lint.py": "print('lint')\n",
     "rules/a.md": "# rule a\n",
     "commands/lane.md": "# lane\n",
+    "agents/reviewer.md": "# reviewer agent\n",
 }
 
 

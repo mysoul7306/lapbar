@@ -39,7 +39,7 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual({c.result for c in checks}, {doctor.PASS})
         self.assertEqual(doctor.exit_code(checks), 0)
         kinds = [c.kind for c in checks]
-        self.assertEqual(kinds.count("asset"), 5)
+        self.assertEqual(kinds.count("asset"), 6, "includes the agents asset")
         self.assertEqual(kinds.count("wiring"), 2)
         self.assertEqual(kinds.count("selftest"), 1, "only selftest: true hooks run")
 

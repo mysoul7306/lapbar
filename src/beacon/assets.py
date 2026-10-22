@@ -13,7 +13,7 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Iterable
 
-CATEGORIES: tuple[str, ...] = ("hooks", "scripts", "rules", "skills")
+CATEGORIES: tuple[str, ...] = ("hooks", "scripts", "rules", "skills", "agents")
 MANIFEST_NAME = "manifest.json"
 
 AssetRoot = Traversable | Path

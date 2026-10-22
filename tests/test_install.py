@@ -47,6 +47,7 @@ class FreshInstallTest(InstallTestCase):
             self.assertEqual(self.statuses(result)[rel], inst.INSTALLED)
         self.assertTrue(os.access(self.target / "hooks/guard.py", os.X_OK))
         self.assertFalse(os.access(self.target / "rules/a.md", os.X_OK))
+        self.assertFalse(os.access(self.target / "agents/reviewer.md", os.X_OK))
         hooks = self.settings()["hooks"]
         guard_cmd = wiring.hook_command(self.target, "hooks/guard.py")
         self.assertEqual(hooks["PreToolUse"], [
@@ -59,6 +60,23 @@ class FreshInstallTest(InstallTestCase):
         result = self.install(categories=asset_mod.parse_only("rules,skills"))
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(list_files(self.target), ["commands/lane.md", "rules/a.md"])
+
+    def test_skills_pin_home_prefix_to_target(self) -> None:
+        skill = "Workflow({ scriptPath: \"~/.claude/scripts/x.js\" })\n"
+        (self.assets / "commands/lane.md").write_text(skill, encoding="utf-8")
+        (self.assets / "rules/a.md").write_text("see ~/.claude/rules/\n", encoding="utf-8")
+        self.install()
+        installed = (self.target / "commands/lane.md").read_text(encoding="utf-8")
+        self.assertIn(f"{self.target}/scripts/x.js", installed)
+        self.assertEqual(installed.count("~/.claude/"), 0)
+        rule = (self.target / "rules/a.md").read_text(encoding="utf-8")
+        self.assertEqual(rule, "see ~/.claude/rules/\n", "only skills are rendered")
+        again = self.install()
+        self.assertEqual(self.statuses(again)["commands/lane.md"], inst.SAME)
+
+    def test_only_agents_installs_agent_files(self) -> None:
+        result = self.install(categories=asset_mod.parse_only("agents"))
+        self.assertEqual(self.statuses(result), {"agents/reviewer.md": inst.INSTALLED})
 
     def test_parse_only_rejects_unknown_category(self) -> None:
         with self.assertRaises(ValueError):
@@ -190,6 +208,7 @@ class MissingAssetTest(InstallTestCase):
         self.assertEqual(len(by_cat["scripts"]), 3)
         self.assertEqual(len(by_cat["rules"]), 5)
         self.assertEqual(by_cat["skills"], ["commands/lane.md", "commands/review-lane.md"])
+        self.assertEqual(by_cat["agents"], ["agents/review-readonly.md"])
         selftests = {a.dst for a in manifest if a.selftest}
         self.assertEqual(selftests, {"hooks/subagent-model-guard.py", "hooks/git-push-guard.py"})
 
