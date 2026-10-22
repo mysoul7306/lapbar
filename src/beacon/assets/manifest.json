@@ -1,0 +1,23 @@
+{
+  "hooks": [
+    {"src": "hooks/subagent-model-guard.py", "dst": "hooks/subagent-model-guard.py", "event": "PreToolUse", "matcher": "Task|Agent|Workflow", "selftest": true},
+    {"src": "hooks/git-push-guard.py", "dst": "hooks/git-push-guard.py", "event": "PreToolUse", "matcher": "Bash", "selftest": true},
+    {"src": "hooks/memory-lint-hook.py", "dst": "hooks/memory-lint-hook.py", "event": "SessionStart", "matcher": null, "selftest": false}
+  ],
+  "scripts": [
+    {"src": "scripts/memory-lint.py", "dst": "scripts/memory-lint.py"},
+    {"src": "scripts/lane-workflow.js", "dst": "scripts/lane-workflow.js"},
+    {"src": "scripts/review-lane-workflow.js", "dst": "scripts/review-lane-workflow.js"}
+  ],
+  "rules": [
+    {"src": "rules/zsh-pitfalls.md", "dst": "rules/zsh-pitfalls.md"},
+    {"src": "rules/security.md", "dst": "rules/security.md"},
+    {"src": "rules/memory-scope.md", "dst": "rules/memory-scope.md"},
+    {"src": "rules/subagent-review.md", "dst": "rules/subagent-review.md"},
+    {"src": "rules/git-workflow.md", "dst": "rules/git-workflow.md"}
+  ],
+  "skills": [
+    {"src": "commands/lane.md", "dst": "commands/lane.md"},
+    {"src": "commands/review-lane.md", "dst": "commands/review-lane.md"}
+  ]
+}
