@@ -22,6 +22,7 @@ HEADERS = ("file", "status", "detail")
 INSTALLED, SAME, DIFFERS, MISSING = "installed", "same", "differs", "missing-asset"
 DRY, WIRED, SKIPPED, ERROR = "dry", "wired", "skipped", "error"
 FAILING = frozenset({MISSING, ERROR})
+HOME_PREFIX = b"~/.claude/"
 
 
 @dataclass(frozen=True)
@@ -97,9 +98,10 @@ def _deployed(row: Row, dry_run: bool) -> bool:
 
 def _install_file(asset: Asset, root: AssetRoot | None, target: Path,
                   force: bool, dry_run: bool) -> Row:
-    payload = asset_mod.read_asset(asset, root)
-    if payload is None:
+    packaged = asset_mod.read_asset(asset, root)
+    if packaged is None:
         return Row(asset.dst, MISSING, f"asset {asset.src} is not packaged")
+    payload = render_payload(asset, packaged, target)
     dest = target / asset.dst
     exists = dest.is_file()
     if exists and dest.read_bytes() == payload:
@@ -111,6 +113,14 @@ def _install_file(asset: Asset, root: AssetRoot | None, target: Path,
         return Row(asset.dst, DRY, f"would {action}")
     _write_file(dest, payload, executable=asset.category == "hooks")
     return Row(asset.dst, INSTALLED, "overwritten (--force)" if exists else "")
+
+
+def render_payload(asset: Asset, payload: bytes, target: Path) -> bytes:
+    """Skills reference scripts as `~/.claude/...`; pin them to the install target,
+    since the Workflow tool is not guaranteed to expand `~`."""
+    if asset.category != "skills":
+        return payload
+    return payload.replace(HOME_PREFIX, (str(target) + "/").encode("utf-8"))
 
 
 def _write_file(dest: Path, payload: bytes, *, executable: bool) -> None:

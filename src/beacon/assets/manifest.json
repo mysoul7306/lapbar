@@ -19,5 +19,8 @@
   "skills": [
     {"src": "commands/lane.md", "dst": "commands/lane.md"},
     {"src": "commands/review-lane.md", "dst": "commands/review-lane.md"}
+  ],
+  "agents": [
+    {"src": "agents/review-readonly.md", "dst": "agents/review-readonly.md"}
   ]
 }

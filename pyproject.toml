@@ -22,7 +22,8 @@ dependencies = []
 beacon = "beacon.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/rok-root/beacon"
+Homepage = "https://github.com/mysoul7306/beacon"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/beacon"]
+exclude = ["**/scrub_map.json"]
