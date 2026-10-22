@@ -50,9 +50,11 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")   # 낮은 것부터. Agent/
 EFFORT_CAP_DEFAULT = "xhigh"       # 이 위 단계 (max) 는 그 호출 안의 표지 ([owner-approved: max]) 가 있어야. env SUBAGENT_EFFORT_CAP 로 조절
 EFFORT_MARK = "[owner-approved: %s]"      # effort 상한 위 단계의 허용 표지 (fable, haiku 표지와 같은 꼴)
 
-AGENT_CALL = re.compile(r'(?<![\w.$])agent\s*\(')
+AGENT_CALL = re.compile(r'(?<![\w$])agent\s*\(')  # x.agent( 도 호출로 세어 같은 검사를 받는다
 # agent 를 호출이 아닌 자리 (별칭 대입, 인자, 속성 접근) 에 쓰면 호출 지점을 못 세니 deny (2026-10-22 보안 리뷰).
 AGENT_ALIAS = re.compile(r'(?<![\w$])agent\b(?!\s*\()')
+# 동적 접근 (eval, Function, globalThis, 계산 속성) 은 호출 지점을 못 세니 deny.
+DYNAMIC_ACCESS = re.compile(r'(?<![\w$.])(eval|Function|globalThis)\s*[(\[.]|\[\s*[\'"`]?agent[\'"`]?\s*\]')
 LITERAL = re.compile(r"""\s*(['"`])([A-Za-z0-9_.\-]+)\1""")         # 값 자리의 문자열 리터럴
 OPT_KEYS = ("model", "effort")                                       # agent() opts 최상위에서 리터럴을 요구하는 키
 
@@ -264,6 +266,10 @@ def agent_calls(script):
     code, end_state = blank_strings_and_comments(script)
     if end_state != "code":
         raise ValueError("닫히지 않은 문자열 또는 주석 — 정규식 리터럴 (/[/*]/ 류) 이면 new RegExp('…') 로 바꿔줘")
+    dyn = DYNAMIC_ACCESS.search(code)
+    if dyn:
+        raise ValueError("eval, Function, globalThis, 계산 속성으로 agent 에 닿는 스크립트는 판정할 수 없어 (script, 줄 %d)"
+                         % (code.count("\n", 0, dyn.start()) + 1))
     alias = AGENT_ALIAS.search(code)
     if alias:
         raise ValueError("agent 를 호출 말고 다른 자리 (별칭, 인자, 속성) 에 썼어 (script, 줄 %d) — 호출마다 agent(...) 로 직접 써줘"
@@ -446,6 +452,15 @@ def _self_test():
         ("Workflow agent 를 인자로 전달 → deny",
          wf("const r = await helper(agent, ITEMS)"),
          True, "별칭"),
+        ("Workflow x.agent( 도 model 검사 → deny",
+         wf("const r = await ctx.agent('p', { effort: 'high' })"),
+         True, "model 이 없어"),
+        ("Workflow globalThis 접근 → deny",
+         wf("const a = globalThis['ag' + 'ent']\nreturn 1"),
+         True, "판정할 수 없어"),
+        ("Workflow eval → deny",
+         wf("eval('agent')\nreturn 1"),
+         True, "판정할 수 없어"),
         ("Workflow agentType 키는 별칭 아님 → pass",
          wf("const r = await agent('p', { agentType: 'review-readonly', model: 'opus', effort: 'high' })"),
          False, None),

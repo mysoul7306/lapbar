@@ -31,7 +31,9 @@ GIT_GLOBAL_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", 
 PUSH_OPT_WITH_VALUE = ("-o", "--push-option", "--repo", "--receive-pack", "--exec")
 # 판정을 뒤집을 수 있는 설정 덮어쓰기 — refspec 없는 push 와 같이 오면 fail-closed.
 CONFIG_OVERRIDE_PREFIXES = ("push.", "remote.", "branch.", "alias.")
-ALIAS_DEFINE = re.compile(r"(?<![\w/.-])git\b[^\n;&|]*?(?:\s-c\s+alias\.|\s+config\b[^\n;&|]*\balias\.)")
+ALIAS_DEFINE = re.compile(r"(?<![\w/.-])git\b[^\n;&|]*?(?:\s-c\s+alias\.|\s+config\b[^\n;&|]*\balias\.)", re.IGNORECASE)
+# git 설정 주입 경로 전부 — 명령줄 밖에서 alias, push 설정을 바꿀 수 있어 fail-closed (2026-10-22 보안 리뷰 2차).
+CONFIG_INJECT = re.compile(r"--config-env\b|(?<![\w-])GIT_CONFIG(_PARAMETERS|_COUNT|_KEY_\d+|_VALUE_\d+|_GLOBAL|_SYSTEM)?=")
 KNOWN_SUBCOMMANDS = frozenset("""add am apply archive bisect blame branch bundle cat-file check-ignore checkout cherry-pick
  clean clone commit config count-objects describe diff fetch filter-branch for-each-ref format-patch fsck gc grep help init
  log ls-files ls-remote ls-tree merge merge-base mv name-rev notes prune pull push rebase reflog remote repack replace
@@ -97,7 +99,7 @@ def parse_push(tokens, start):
         if t in GIT_GLOBAL_WITH_VALUE:
             if t == "-C" and i + 1 < len(tokens):
                 repo_dir = tokens[i + 1]
-            if t == "-c" and i + 1 < len(tokens) and tokens[i + 1].startswith(CONFIG_OVERRIDE_PREFIXES):
+            if t == "-c" and i + 1 < len(tokens) and tokens[i + 1].lower().startswith(CONFIG_OVERRIDE_PREFIXES):
                 override = True
             if t in ("--git-dir", "--work-tree", "--namespace"):
                 override = True
@@ -133,6 +135,8 @@ def parse_push(tokens, start):
 
 def judge(command, cwd):
     """deny 사유 문자열 또는 None (통과)."""
+    if CONFIG_INJECT.search(command):
+        return "git 설정 주입 (--config-env, GIT_CONFIG_* env) 이 든 명령은 push 여부를 판정할 수 없어 막았어."
     if ALIAS_DEFINE.search(command):
         return "git alias 를 정의하거나 -c alias.* 로 넘기는 명령은 push 여부를 판정할 수 없어 막았어."
     alias_reason = alias_push_reason(command, cwd)
@@ -307,6 +311,11 @@ def self_test():
         case('git config alias 정의 → deny', "git config --global alias.p 'push origin develop'", work, True, "alias")
         case('-c push.default=x, refspec 없음 → deny', 'git -c push.default=upstream push', work, True, "판정할 수 없어")
         case('-c user.name=x origin feat/x → pass', 'git -c user.name=x push origin feat/x', work, False)
+        case('-c Alias.p (대문자) → deny', 'git -c Alias.p=push p origin develop', work, True, 'alias')
+        case('-c PUSH.default, refspec 없음 → deny', 'git -c PUSH.default=upstream push', work, True, '판정할 수 없어')
+        case('--config-env → deny', 'git --config-env=alias.p=X p origin develop', work, True, '설정 주입')
+        case('GIT_CONFIG_PARAMETERS env → deny', "GIT_CONFIG_PARAMETERS='alias.p=push' git p origin develop", work, True, '설정 주입')
+        case('GIT_CONFIG_COUNT env → deny', 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p git p', work, True, '설정 주입')
         case(":develop (삭제) → deny", "git push origin :develop", work, True)
         case("--delete develop → deny", "git push origin --delete develop", work, True)
         case("--all → deny", "git push --all origin", work, True, "--all")
