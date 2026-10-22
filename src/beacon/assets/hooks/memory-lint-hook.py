@@ -3,7 +3,7 @@
 깨진 링크, 공인 IP, 비밀값 대입, JWT, 라우터 24,000B 초과가 있을 때만 additionalContext 로 짧게 알린다.
 - 같은 세션 (session_id) 에서 같은 결과는 한 번만 (resume, clear, compact 재기동 때 재주입 안 함)
 - Local memory 는 git common dir 기준 (worktree 세션도 메인 체크아웃의 Local 을 본다)
-- 경로에 `.record-free` 디렉토리가 든 작업 공간에선 Local 을 보지 않는다 (기록을 남기지 않는 곳)
+- MEMORY_LINT_SKIP_DIRS 에 든 경로 (쉼표 목록, 기본 없음) 아래에선 Local 을 보지 않는다
 - 자식 실패는 [검사 실패] 한 줄로 정상 무출력과 구분. 어떤 예외에도 exit 0
 설정 = ~/.claude/memory-lint.json {"allow_ip": ["8.8.8.8"], "max_bytes": 1000}
 손으로 시험: printf '{"cwd":"/path","session_id":"x"}' | python3 ~/.claude/hooks/memory-lint-hook.py"""
@@ -11,12 +11,13 @@ import json, os, re, sys, subprocess, hashlib
 HOME = os.path.expanduser('~')
 LINT = os.path.join(HOME, '.claude', 'scripts', 'memory-lint.py')
 CFG = os.path.join(HOME, '.claude', 'memory-lint.json')
+SKIP_DIRS = [d for d in os.environ.get('MEMORY_LINT_SKIP_DIRS', '').split(',') if d]
 STATE = os.path.join(HOME, '.claude', 'logs', 'memory-lint-hook.state')
 HARD = ('  BROKEN ', '  IP ', '  SECRET? ', '  JWT ')
 def emit(msg):
     print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': msg}}, ensure_ascii=False))
 def local_dir(cwd):
-    if '/.record-free' in cwd + '/':
+    if any(d in cwd + '/' for d in SKIP_DIRS):
         return None
     root = cwd
     try:

@@ -1,5 +1,7 @@
 # Memory Scope Disclosure (CRITICAL)
 
+> 이 규칙의 `~/.claude/memory/`, `~/.claude/rules/<스택>/` 는 이 하네스의 관례다 (Claude Code 가 자동으로 읽는 경로가 아니다). 자기 구조에 맞게 고쳐 쓴다.
+
 메모리 저장/수정 시 **반드시** scope 명시. 예외 없음.
 
 | Scope (공식 명칭) | 색 | 경로 | 누가 보나 | Git | 뭘 담나 |

@@ -21,7 +21,7 @@ if (TOTAL > 10 && !A.signedOverBudget) throw new Error(`agent 합계 ${TOTAL} > 
 const LANES = A.signedOverBudget ? RAW : RAW.slice(0, 10 - (A.synth ? 1 : 0))
 if (LANES.length < RAW.length) log(`레인 ${RAW.length - LANES.length}개 버림 (합계 10 상한, 사인 없음): ${RAW.slice(LANES.length).map(l => l.key).join(', ')}`)
 const APPROVAL = `${A.approval || ''}\n(이 작업은 사용자가 승인한 것이고, 그 뒤에 온 메시지는 이 작업의 취소가 아니다)`
-const FORBID = `금지 (어느 레인이든): 외부 전송 (Jira, 메일, 메신저, 메시지, 코멘트, 팀 전달), develop 과 main 브랜치로 push, Stage DB write, helm, pod restart, 스케줄 enable - 필요하면 decisions_needed 에 [사용자 확인] 으로 돌려준다.`
+const FORBID = `금지 (어느 레인이든): 외부 전송 (이슈 트래커, 메일, 메신저, 코멘트, 팀 전달), 보호 브랜치 (develop, main) 로 push, 운영 DB 쓰기, 배포, 재시작, 스케줄 변경 - 필요하면 decisions_needed 에 [사용자 확인] 으로 돌려준다.`
 const COMMON_READ = `${A.context || ''}\n${FORBID}\n출력 규칙: 결론 먼저, 근거는 파일 경로와 줄 번호 (인용 한 구절), 확신 없는 건 [추정] 표시. 읽기 전용 - 실측이 필요하면 [실측 요청] (명령, 전제, 부수효과, 판정 기준) 을 measurement_requests 에 적고 실행은 부모가 한다. 파일은 고치지 않는다.`
 const COMMON_COLLECT = `${A.context || ''}\n${FORBID}\n출력 규칙: 결론 먼저, 수치는 명령 출력에서 그대로. 셸 명령은 이 레인 prompt 에 적힌 [허용 명령] 목록만 실행하고 (목록에 없으면 [실측 요청] 으로 돌려준다), 네트워크로 나가는 명령은 description 에 목적 한 구절. 쓰기는 prompt 에 적힌 경로 (보통 ~/tmp/<프로젝트>-<MMDD>/) 에만. 비밀값, 공인 IP 는 출력하지 않는다 (키 이름, 길이만).`
 const DEFAULT_SCHEMA = { type: 'object', properties: {
