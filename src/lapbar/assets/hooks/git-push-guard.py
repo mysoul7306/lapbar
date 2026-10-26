@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""git push 가드 (PreToolUse: Bash).
+"""git push guard (PreToolUse: Bash).
 
-develop / main / master 로 가는 `git push` 를 **무조건 deny** 한다. push 는 사용자 몫이라는 규칙
-(~/.claude/rules/git-workflow.md) 이 문장만으로는 두 번 깨졌다 (2026-07-08 워크플로우 서술 오독,
-2026-10-13 사인 대기 목록 응답 오독). 2026-10-13 사용자 요청: matcher 로는 못 잡으니 push 를 확실히 막는 hook 을 만든다.
+**Always denies** a `git push` that goes to develop / main / master. The rule that push belongs to the
+user (~/.claude/rules/git-workflow.md) broke twice when it was only written down (2026-07-08 a workflow
+description misread as a go-ahead, 2026-10-13 a reply to a sign-off list misread). 2026-10-13 user request: a matcher cannot catch it, so build a hook that reliably blocks the push.
 
-판정 원칙 = 보수적 (fail-closed):
-- 명시 refspec (`origin develop`, `HEAD:develop`, `+develop`, `refs/heads/main`, `develop:develop`) 은
-  목적지 (`:` 뒤, 없으면 앞) 를 본다. 삭제 (`:develop`, `--delete develop`) 도 막는다.
-- refspec 이 없으면 (`git push`, `git push origin`, `git push -u origin HEAD`) 현재 브랜치와 `@{push}`
-  (upstream 이 develop 을 가리키는 feature 브랜치) 를 실제 git 으로 푼다. 못 풀면 deny.
-- `--all`, `--mirror` 는 deny. `--dry-run` 도 예외 없음 (dry-run 이 필요하면 사용자가).
-- 따옴표, `bash -c`, ssh 원격 문자열 안의 git push 는 토큰으로 못 풀면 deny (밖으로 꺼내 쓰라고 안내).
-- feature 브랜치 push 는 그대로 통과 (출력 없음).
+Judgement is conservative (fail-closed):
+- An explicit refspec (`origin develop`, `HEAD:develop`, `+develop`, `refs/heads/main`, `develop:develop`)
+  is judged by its destination (after `:`, or the whole spec if there is none). Deletes (`:develop`, `--delete develop`) are blocked too.
+- With no refspec (`git push`, `git push origin`, `git push -u origin HEAD`) the current branch and `@{push}`
+  (a feature branch whose upstream points at develop) are resolved with real git. If that fails, deny.
+- `--all` and `--mirror` are denied. `--dry-run` gets no exception (the user runs dry-runs).
+- A git push inside quotes, `bash -c` or an ssh remote string is denied when it cannot be tokenized (the message says to move it out).
+- A feature branch push passes untouched (no output).
 
-`python3 git-push-guard.py --self-test` = 회귀 케이스 (임시 저장소로 현재 브랜치, upstream 해석까지).
+`python3 git-push-guard.py --self-test` = regression cases (a temp repo, down to current branch and upstream resolution).
 """
 import json
 import os
@@ -26,23 +26,23 @@ import tempfile
 
 PROTECTED = ("develop", "main", "master")
 GIT_GLOBAL_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path")
-# 값을 별도 토큰으로도 받는 옵션만. --force-with-lease, --signed, --recurse-submodules 는 `=` 로만 값을 받고
-# --force-if-includes 는 플래그라 여기 넣으면 다음 토큰 (remote) 을 삼켜 브랜치가 remote 자리로 밀린다 (2026-10-22 보안 리뷰).
+# Only options that also take their value as a separate argument. --force-with-lease, --signed, --recurse-submodules take a value only via `=`,
+# and --force-if-includes is a flag: listing it here would swallow the next argument (the remote) and shift the branch into the remote slot (2026-10-22 security review).
 PUSH_OPT_WITH_VALUE = ("-o", "--push-option", "--repo", "--receive-pack", "--exec")
-# 판정을 뒤집을 수 있는 설정 덮어쓰기 — refspec 없는 push 와 같이 오면 fail-closed.
+# Config overrides that can flip the verdict - fail-closed when they come with a push that has no refspec.
 CONFIG_OVERRIDE_PREFIXES = ("push.", "remote.", "branch.", "alias.", "include.", "includeif.", "url.", "core.hookspath")
 ALIAS_DEFINE = re.compile(r"(?<![\w.-])git\b[^\n;&|]*?(?:\s-c\s+alias\.|\s+config\b[^\n;&|]*\balias\.)", re.IGNORECASE)
-# git 설정 주입 경로 전부 — 명령줄 밖에서 alias, push 설정을 바꿀 수 있어 fail-closed (2026-10-22 보안 리뷰 2차).
+# Every git config injection path - they can change alias and push settings from outside the command line, so fail-closed (2026-10-22 security review, round 2).
 CONFIG_INJECT = re.compile(r"--config-env\b|(?<![\w-])(GIT_[A-Z_]+|HOME|XDG_CONFIG_HOME)=")
 KNOWN_SUBCOMMANDS = frozenset("""add am apply archive bisect blame branch bundle cat-file check-ignore checkout cherry-pick
  clean clone commit config count-objects describe diff fetch filter-branch for-each-ref format-patch fsck gc grep help init
  log ls-files ls-remote ls-tree merge merge-base mv name-rev notes prune pull push rebase reflog remote repack replace
  reset restore rev-list rev-parse revert rm shortlog show show-ref stash status submodule switch symbolic-ref tag
  update-index update-ref var version worktree""".split())
-GUIDE = ("develop / main push 는 사용자 몫이야 — Claude 는 feature 브랜치만 push 하고, merge 까지 한 뒤 "
-         "\"push = 사용자\" 으로 남겨 둬. (규칙 ~/.claude/rules/git-workflow.md)")
+GUIDE = ("Pushing develop / main is the user's job - Claude pushes feature branches only, does the merge, then "
+         "leaves it as \"push = user\". (rule ~/.claude/rules/git-workflow.md)")
 SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\||\n")
-# `git` 앞에 `/` 를 허용해 /usr/bin/git, ./git 도 잡는다 (2026-10-22 보안 리뷰 4차).
+# Allows `/` before `git` so /usr/bin/git and ./git are caught too (2026-10-22 security review, round 4).
 RAW_PUSH = re.compile(r"(?<![\w.-])git\b(?:\s+-[^\s]+(?:\s+[^\s]+)?)*\s+push(?![\w./-])")
 
 
@@ -62,8 +62,8 @@ def _git(args, cwd):
 
 
 def resolve_targets(cwd, include_upstream):
-    """현재 브랜치 이름 (+ refspec 이 아예 없을 땐 @{push}, @{upstream} 이 가리키는 원격 브랜치 —
-    push.default=upstream 이면 그리로 간다) 을 돌려준다. 못 풀면 None."""
+    """Returns the current branch name (plus, when there is no refspec at all, the remote branch that @{push}
+    and @{upstream} point at - push.default=upstream sends it there). None when it cannot be resolved."""
     head = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
     if not head or head == "HEAD":
         return None
@@ -77,7 +77,7 @@ def resolve_targets(cwd, include_upstream):
 
 
 def dst_of(refspec):
-    """refspec 의 목적지 브랜치 이름. HEAD/@ 는 '현재 브랜치' 라는 뜻으로 None 을 돌려준다."""
+    """Destination branch name of a refspec. HEAD/@ mean 'the current branch', so they return None."""
     spec = refspec.lstrip("+")
     if ":" in spec:
         dst = spec.split(":", 1)[1]
@@ -91,7 +91,7 @@ def dst_of(refspec):
 
 
 def parse_push(tokens, start):
-    """tokens[start] 가 git. push 서브커맨드면 dict, 아니면 None."""
+    """tokens[start] is git. Returns a dict if this is the push subcommand, otherwise None."""
     i = start + 1
     repo_dir = None
     override = False
@@ -135,11 +135,11 @@ def parse_push(tokens, start):
 
 
 def judge(command, cwd):
-    """deny 사유 문자열 또는 None (통과)."""
+    """A deny reason string, or None (pass)."""
     if CONFIG_INJECT.search(command) and _mentions_git(command):
-        return "git 설정 주입 (--config-env, GIT_CONFIG_* env) 이 든 명령은 push 여부를 판정할 수 없어 막았어."
+        return "Blocked: a command with git config injection (--config-env, GIT_CONFIG_* env) cannot be judged for push."
     if ALIAS_DEFINE.search(command):
-        return "git alias 를 정의하거나 -c alias.* 로 넘기는 명령은 push 여부를 판정할 수 없어 막았어."
+        return "Blocked: a command that defines a git alias or passes -c alias.* cannot be judged for push."
     alias_reason = alias_push_reason(command, cwd)
     if alias_reason:
         return alias_reason
@@ -149,7 +149,7 @@ def judge(command, cwd):
     try:
         shlex.split(command, posix=True)
     except ValueError:
-        return "git push 가 든 명령의 따옴표가 안 맞아 (파싱 불가) 막았어."
+        return "Blocked: the quotes in a command containing git push do not match (cannot parse)."
     parsed = 0
     reasons = []
     for segment in SEGMENT_SPLIT.split(command):
@@ -158,7 +158,7 @@ def judge(command, cwd):
         try:
             tokens = shlex.split(segment, posix=True)
         except ValueError:
-            return "git push 가 든 명령을 토큰으로 못 풀었어 (따옴표 불일치)."
+            return "Blocked: could not split the command containing git push into arguments (mismatched quotes)."
         found = False
         for idx, tok in enumerate(tokens):
             if tok != "git" and not tok.endswith("/git"):
@@ -172,15 +172,15 @@ def judge(command, cwd):
             if reason:
                 reasons.append(reason)
         if not found:
-            return ("따옴표나 bash -c, ssh 문자열 안의 git push 는 대상을 판정할 수 없어 막았어: "
-                    "`%s`. push 를 바깥 명령으로 꺼내서 다시." % segment.strip()[:120])
+            return ("Blocked: a git push inside quotes, bash -c or an ssh string cannot be judged for its target: "
+                    "`%s`. Move the push out into a top-level command and retry." % segment.strip()[:120])
     if parsed < raw_hits:
-        return "git push 가 %d곳인데 %d곳만 판정됐어 — 숨은 push 가 있어 막았어." % (raw_hits, parsed)
+        return "Blocked: git push appears %d times but only %d were judged - a hidden push is present." % (raw_hits, parsed)
     return reasons[0] if reasons else None
 
 
 def _mentions_git(command):
-    """shlex 토큰 기준으로 git 실행이 있는지 (따옴표로 못 숨기게). 못 풀면 fail-closed True."""
+    """Whether a git invocation is present, by shlex arguments (so quotes cannot hide it). Fail-closed True if unparsable."""
     try:
         tokens = shlex.split(command, posix=True)
     except ValueError:
@@ -189,7 +189,7 @@ def _mentions_git(command):
 
 
 def alias_push_reason(command, cwd):
-    """`git <alias>` 가 push 로 풀리면 deny 사유. 모르는 서브커맨드는 저장소의 alias 설정으로 확인한다."""
+    """A deny reason when `git <alias>` expands to a push. Unknown subcommands are checked against the repo's alias config."""
     if "git" not in command:
         return None
     for segment in SEGMENT_SPLIT.split(command):
@@ -214,7 +214,7 @@ def alias_push_reason(command, cwd):
             if expansion is None:
                 continue
             if expansion.startswith("!") or re.search(r"(?<![\w/.-])push(?![\w./-])", expansion):
-                return "`git %s` 는 alias 라 push 로 풀릴 수 있어 막았어 (alias 대신 git push 를 직접 써줘)." % tokens[j]
+                return "Blocked: `git %s` is an alias that can expand to a push (use git push directly instead of the alias)." % tokens[j]
     return None
 
 
@@ -229,7 +229,7 @@ def _git_alias(repo_dir, name):
 
 def judge_push(push, cwd, segment):
     if push["all_or_mirror"]:
-        return "`--all` / `--mirror` push 는 develop, main 까지 밀어내서 막았어: `%s`." % segment[:120]
+        return "Blocked: an `--all` / `--mirror` push also pushes develop and main: `%s`." % segment[:120]
     positional = push["positional"]
     refspecs = positional[1:] if positional else []
     if push["delete"] and positional:
@@ -244,18 +244,18 @@ def judge_push(push, cwd, segment):
         else:
             targets.add(dst)
     if need_resolve and push["override"]:
-        return ("설정 덮어쓰기 (-c push.*/remote.*/branch.*, --git-dir) 와 refspec 없는 push 는 "
-                "대상을 판정할 수 없어 막았어: `%s`." % segment[:120])
+        return ("Blocked: a config override (-c push.*/remote.*/branch.*, --git-dir) with a push that has no refspec "
+                "cannot be judged for its target: `%s`." % segment[:120])
     if need_resolve:
         repo_dir = push["repo_dir"] or cwd or os.getcwd()
         resolved = resolve_targets(repo_dir, include_upstream=no_refspec)
         if resolved is None:
-            return ("refspec 없이 `%s` — 현재 브랜치를 못 풀어서 막았어 (repo 밖이거나 detached). "
-                    "`git push origin <feature-branch>` 로 명시해 줘." % segment[:120])
+            return ("Blocked: `%s` has no refspec and could not resolve the current branch (outside a repo or detached). "
+                    "Name it explicitly: `git push origin <feature-branch>`." % segment[:120])
         targets |= resolved
     hit = sorted(t for t in targets if t in PROTECTED)
     if hit:
-        return "`%s` 는 %s 로 가는 push 라 막았어." % (segment[:120], ", ".join(hit))
+        return "Blocked: `%s` pushes to %s." % (segment[:120], ", ".join(hit))
     return None
 
 
@@ -271,7 +271,7 @@ def main():
     try:
         reason = judge(command, cwd)
     except Exception as e:  # fail-closed
-        reason = "git push 가드 내부 오류 (%s) — 안전하게 막았어." % e.__class__.__name__
+        reason = "Blocked to be safe: git push guard internal error (%s)." % e.__class__.__name__
     if reason:
         deny(reason)
     return 0
@@ -303,7 +303,7 @@ def self_test():
 
     with tempfile.TemporaryDirectory() as tmp:
         work = _make_repo(tmp)
-        # --- 명시 refspec
+        # --- explicit refspec
         case("origin develop → deny", "git push origin develop", work, True, "develop")
         case("origin main → deny", "git push -q origin main", work, True, "main")
         case("-u origin develop → deny", "git push -u origin develop", work, True)
@@ -313,64 +313,64 @@ def self_test():
         case("refs/heads/main → deny", "git push origin refs/heads/main", work, True)
         case("--force develop → deny", "git push --force origin develop", work, True)
         case("--force-with-lease=x develop → deny", "git push --force-with-lease=develop origin develop", work, True)
-        case('--force-with-lease origin develop (값 없는 꼴) → deny', 'git push --force-with-lease origin develop', work, True, "develop")
+        case('--force-with-lease origin develop (no value form) → deny', 'git push --force-with-lease origin develop', work, True, "develop")
         case('--force-if-includes --force-with-lease origin main → deny', 'git push --force-if-includes --force-with-lease origin main', work, True)
         case('--signed origin main → deny', 'git push --signed origin main', work, True, "main")
         case('--force-with-lease origin feat/x → pass', 'git push --force-with-lease origin feat/x', work, False)
         case('-c alias.p=push p origin develop → deny', 'git -c alias.p=push p origin develop', work, True, "alias")
-        case('git config alias 정의 → deny', "git config --global alias.p 'push origin develop'", work, True, "alias")
-        case('-c push.default=x, refspec 없음 → deny', 'git -c push.default=upstream push', work, True, "판정할 수 없어")
+        case('git config alias definition → deny', "git config --global alias.p 'push origin develop'", work, True, "alias")
+        case('-c push.default=x, no refspec → deny', 'git -c push.default=upstream push', work, True, "cannot be judged")
         case('-c user.name=x origin feat/x → pass', 'git -c user.name=x push origin feat/x', work, False)
-        case('-c Alias.p (대문자) → deny', 'git -c Alias.p=push p origin develop', work, True, 'alias')
-        case('-c PUSH.default, refspec 없음 → deny', 'git -c PUSH.default=upstream push', work, True, '판정할 수 없어')
-        case('--config-env → deny', 'git --config-env=alias.p=X p origin develop', work, True, '설정 주입')
-        case('GIT_CONFIG_PARAMETERS env → deny', "GIT_CONFIG_PARAMETERS='alias.p=push' git p origin develop", work, True, '설정 주입')
-        case('GIT_CONFIG_COUNT env → deny', 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p git p', work, True, '설정 주입')
-        case('GIT_DIR env + push → deny', 'GIT_DIR=/tmp/x/.git git pu' + 'sh', work, True, '설정 주입')
-        case('HOME env + git → deny', 'HOME=/tmp/h git pu' + 'sh origin feat/x', work, True, '설정 주입')
-        case('-c include.path, refspec 없음 → deny', 'git -c include.path=/tmp/c pu' + 'sh', work, True, '판정할 수 없어')
-        case('HOME env 인데 git 아님 → pass', 'HOME=/tmp/h ls', work, False)
-        case('/usr/bin/git 절대경로 push develop → deny', '/usr/bin/git push origin develop', work, True, 'develop')
-        case('./git 상대경로 push main → deny', './git push origin main', work, True)
+        case('-c Alias.p (uppercase) → deny', 'git -c Alias.p=push p origin develop', work, True, 'alias')
+        case('-c PUSH.default, no refspec → deny', 'git -c PUSH.default=upstream push', work, True, 'cannot be judged')
+        case('--config-env → deny', 'git --config-env=alias.p=X p origin develop', work, True, 'config injection')
+        case('GIT_CONFIG_PARAMETERS env → deny', "GIT_CONFIG_PARAMETERS='alias.p=push' git p origin develop", work, True, 'config injection')
+        case('GIT_CONFIG_COUNT env → deny', 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p git p', work, True, 'config injection')
+        case('GIT_DIR env + push → deny', 'GIT_DIR=/tmp/x/.git git pu' + 'sh', work, True, 'config injection')
+        case('HOME env + git → deny', 'HOME=/tmp/h git pu' + 'sh origin feat/x', work, True, 'config injection')
+        case('-c include.path, no refspec → deny', 'git -c include.path=/tmp/c pu' + 'sh', work, True, 'cannot be judged')
+        case('HOME env but not git → pass', 'HOME=/tmp/h ls', work, False)
+        case('/usr/bin/git absolute path push develop → deny', '/usr/bin/git push origin develop', work, True, 'develop')
+        case('./git relative path push main → deny', './git push origin main', work, True)
         case('/usr/bin/git push feat/x → pass', '/usr/bin/git push origin feat/x', work, False)
-        case(":develop (삭제) → deny", "git push origin :develop", work, True)
+        case(":develop (delete) → deny", "git push origin :develop", work, True)
         case("--delete develop → deny", "git push origin --delete develop", work, True)
         case("--all → deny", "git push --all origin", work, True, "--all")
         case("--mirror → deny", "git push --mirror origin", work, True)
-        case("--dry-run develop → deny (예외 없음)", "git push --dry-run origin develop", work, True)
+        case("--dry-run develop → deny (no exception)", "git push --dry-run origin develop", work, True)
         case("origin feat/x → pass", "git push origin feat/x", work, False)
         case("-u origin feat/x → pass", "git push -u origin feat/x", work, False)
-        case("origin develop:feat/x (목적지 feature) → pass", "git push origin develop:feat/x", work, False)
+        case("origin develop:feat/x (destination is a feature branch) → pass", "git push origin develop:feat/x", work, False)
         case("origin feat/x:refs/heads/feat/x → pass", "git push origin feat/x:refs/heads/feat/x", work, False)
         case("-o ci.skip origin feat/x → pass", "git push -o ci.skip origin feat/x", work, False)
-        case("체인 안 develop → deny", "git fetch -q && git merge --no-ff x && git push origin develop", work, True)
-        case("체인 안 feature → pass", "git add -A && git commit -q -m x && git push -u origin feat/x", work, False)
-        case("push 없는 git → pass", "git push-check 2>/dev/null; git log --oneline -1", work, False)
-        case("pushd 같은 단어 → pass", "pushd /tmp && git status && popd", work, False)
-        # --- refspec 없음 → 실제 저장소로 현재 브랜치 해석
-        case("refspec 없음, 현재 feat/x (upstream 없음) → pass", "git push", work, False)
-        case("origin 만, 현재 feat/x → pass", "git push origin", work, False)
-        case("origin HEAD, 현재 feat/x → pass", "git push origin HEAD", work, False)
+        case("develop inside a chain → deny", "git fetch -q && git merge --no-ff x && git push origin develop", work, True)
+        case("feature inside a chain → pass", "git add -A && git commit -q -m x && git push -u origin feat/x", work, False)
+        case("git without push → pass", "git push-check 2>/dev/null; git log --oneline -1", work, False)
+        case("look-alike word such as pushd → pass", "pushd /tmp && git status && popd", work, False)
+        # --- no refspec → resolve the current branch in a real repo
+        case("no refspec, on feat/x (no upstream) → pass", "git push", work, False)
+        case("origin only, on feat/x → pass", "git push origin", work, False)
+        case("origin HEAD, on feat/x → pass", "git push origin HEAD", work, False)
         subprocess.run(["git", "-C", work, "branch", "-q", "--set-upstream-to=origin/develop", "feat/x"], check=True)
-        case("refspec 없음, feat/x 가 origin/develop 를 upstream 으로 → deny", "git push", work, True, "develop")
-        case("-u origin HEAD, 현재 feat/x (HEAD 는 upstream 무관) → pass", "git push -u origin HEAD", work, False)
-        case("-C <repo> push (cwd 밖) → deny", "git -C %s push" % work, "/", True)
+        case("no refspec, feat/x has origin/develop as upstream → deny", "git push", work, True, "develop")
+        case("-u origin HEAD, on feat/x (HEAD ignores upstream) → pass", "git push -u origin HEAD", work, False)
+        case("-C <repo> push (outside cwd) → deny", "git -C %s push" % work, "/", True)
         subprocess.run(["git", "-C", work, "branch", "-q", "--unset-upstream", "feat/x"], check=True)
         subprocess.run(["git", "-C", work, "checkout", "-q", "develop"], check=True)
-        case("refspec 없음, 현재 develop → deny", "git push", work, True, "develop")
-        case("origin HEAD, 현재 develop → deny", "git push origin HEAD", work, True)
-        case("cwd 가 repo 아님 + refspec 없음 → deny (못 풀면 막음)", "git push", tmp, True, "못 풀어서")
+        case("no refspec, on develop → deny", "git push", work, True, "develop")
+        case("origin HEAD, on develop → deny", "git push origin HEAD", work, True)
+        case("cwd is not a repo + no refspec → deny (blocked when unresolvable)", "git push", tmp, True, "could not resolve")
         subprocess.run(["git", "-C", work, "config", "alias.pp", "push origin develop"], check=True)
         subprocess.run(["git", "-C", work, "config", "alias.st", "status -s"], check=True)
-        case("저장소 alias pp → push 로 풀려 deny", "git pp", work, True, "alias")
-        case("저장소 alias st (status) → pass", "git st", work, False)
-        case("모르는 서브커맨드 (alias 아님) → pass", "git whatchanged", work, False)
-        # --- 숨은 push (fail-closed)
-        case("bash -c 안 push → deny", "bash -c 'git push origin develop'", work, True, "판정할 수 없어")
-        case("ssh 원격 문자열 안 push → deny", "ssh gw 'cd repo && git push origin feat/x'", work, True)
-        case("따옴표 불일치 → deny", "git push origin feat/x && echo \"x", work, True)
-        # --- 비 git
-        case("빈 명령 → pass", "", work, False)
+        case("repo alias pp → expands to push, deny", "git pp", work, True, "alias")
+        case("repo alias st (status) → pass", "git st", work, False)
+        case("unknown subcommand (not an alias) → pass", "git whatchanged", work, False)
+        # --- hidden push (fail-closed)
+        case("push inside bash -c → deny", "bash -c 'git push origin develop'", work, True, "cannot be judged")
+        case("push inside an ssh remote string → deny", "ssh gw 'cd repo && git push origin feat/x'", work, True)
+        case("mismatched quotes → deny", "git push origin feat/x && echo \"x", work, True)
+        # --- not git
+        case("empty command → pass", "", work, False)
         case("ls → pass", "ls -la", work, False)
     n = len(results)
     print("self-test: %d/%d PASS" % (sum(results), n))
