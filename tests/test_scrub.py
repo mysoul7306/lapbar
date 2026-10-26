@@ -1,4 +1,4 @@
-"""Tests for the scrub table, the scan gate and `beacon bundle` (stdlib unittest only)."""
+"""Tests for the scrub table, the scan gate and `lapbar bundle` (stdlib unittest only)."""
 from __future__ import annotations
 
 import argparse
@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from beacon import bundle, scrub
+from lapbar import bundle, scrub
 
 
 
@@ -100,7 +100,7 @@ class ScanTest(unittest.TestCase):
         text = "\n".join([
             "목록, 기록, 등록 은 그대로, 사용자 결정, [owner-approved: fable]",
             "zsh `[[ $a < $b ]]`, `/home/<u>/run.sh`, eyJ…\\.…, 8.8.8.8, 127.0.0.1, v3.14.8",
-            "feedback_<slug>.md, reference_env_<topic>.md, beacon, workspace, staging",
+            "feedback_<slug>.md, reference_env_<topic>.md, lapbar, workspace, staging",
         ])
         self.assertEqual(scrub.scan_text(text, "rules/clean.md"), ())
 
@@ -126,7 +126,7 @@ class BundleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "rules").mkdir()
             (Path(tmp) / "rules" / "ok.md").write_text("사용자 결정, ~/.claude\n", encoding="utf-8")
-            code, out = self.run_cli("--check", "--assets", tmp)
+            code, out = self.run_cli("--check", "--assets", tmp, "--map", str(Path(tmp) / "absent.json"))
         self.assertEqual(code, 0)
         self.assertIn("scan: 0 hit(s)", out)
 
@@ -134,7 +134,7 @@ class BundleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "hooks").mkdir()
             (Path(tmp) / "hooks" / "bad.py").write_text("# fine\nHOME = '/Users/someone'\n", encoding="utf-8")
-            code, out = self.run_cli("--check", "--assets", tmp)
+            code, out = self.run_cli("--check", "--assets", tmp, "--map", str(Path(tmp) / "absent.json"))
         self.assertEqual(code, 1)
         self.assertIn("home-path -> hooks/bad.py:2", out)
         self.assertNotIn("someone", out)

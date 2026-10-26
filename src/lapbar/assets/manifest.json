@@ -1,0 +1,40 @@
+{
+  "hooks": [
+    {"src": "hooks/subagent-model-guard.py", "dst": "hooks/subagent-model-guard.py", "event": "PreToolUse", "matcher": "Task|Agent|Workflow", "selftest": true,
+     "probes": [
+       {"name": "agent call without a model is denied", "input": {"tool_name": "Agent", "tool_input": {"prompt": "probe", "subagent_type": "general-purpose", "description": "probe"}}, "expect": "deny"},
+       {"name": "agent call with model and effort passes", "input": {"tool_name": "Agent", "tool_input": {"prompt": "probe", "subagent_type": "general-purpose", "description": "probe", "model": "opus", "effort": "high"}}, "expect": "allow"}
+     ]},
+    {"src": "hooks/git-push-guard.py", "dst": "hooks/git-push-guard.py", "event": "PreToolUse", "matcher": "Bash", "selftest": true,
+     "probes": [
+       {"name": "push to protected branch is denied", "input": {"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}, "expect": "deny"},
+       {"name": "feature branch push passes", "input": {"tool_name": "Bash", "tool_input": {"command": "git push origin feat/probe"}}, "expect": "allow"}
+     ]},
+    {"src": "hooks/memory-lint-hook.py", "dst": "hooks/memory-lint-hook.py", "event": "SessionStart", "matcher": null, "selftest": false},
+    {"src": "hooks/git-readonly-guard.py", "dst": "hooks/git-readonly-guard.py", "event": null, "matcher": null, "selftest": true,
+     "probes": [
+       {"name": "piped git command is denied", "input": {"tool_name": "Bash", "agent_type": "scout-git", "cwd": ".", "tool_input": {"command": "git diff | cat"}}, "expect": "deny"},
+       {"name": "read-only git log passes", "input": {"tool_name": "Bash", "agent_type": "scout-git", "cwd": ".", "tool_input": {"command": "git log -n 3"}}, "expect": "allow"}
+     ]}
+  ],
+  "scripts": [
+    {"src": "scripts/memory-lint.py", "dst": "scripts/memory-lint.py"},
+    {"src": "scripts/lane-workflow.js", "dst": "scripts/lane-workflow.js"},
+    {"src": "scripts/review-lane-workflow.js", "dst": "scripts/review-lane-workflow.js"}
+  ],
+  "rules": [
+    {"src": "rules/zsh-pitfalls.md", "dst": "rules/zsh-pitfalls.md"},
+    {"src": "rules/security.md", "dst": "rules/security.md"},
+    {"src": "rules/memory-scope.md", "dst": "rules/memory-scope.md"},
+    {"src": "rules/subagent-review.md", "dst": "rules/subagent-review.md"},
+    {"src": "rules/git-workflow.md", "dst": "rules/git-workflow.md"}
+  ],
+  "skills": [
+    {"src": "commands/lane.md", "dst": "commands/lane.md"},
+    {"src": "commands/review-lane.md", "dst": "commands/review-lane.md"}
+  ],
+  "agents": [
+    {"src": "agents/review-readonly.md", "dst": "agents/review-readonly.md"},
+    {"src": "agents/scout-git.md", "dst": "agents/scout-git.md"}
+  ]
+}
