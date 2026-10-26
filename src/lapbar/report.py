@@ -1,4 +1,4 @@
-"""`beacon report`: actual vs all-on-head-model cost from local Claude Code transcripts.
+"""`lapbar report`: actual vs all-on-head-model cost from local Claude Code transcripts.
 
 Costs are list price x tokens (an estimate, not billing). Nothing leaves the machine.
 """
@@ -14,9 +14,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable, Mapping
 
-from beacon import report_render
-from beacon.pricing import PriceTable, cost_usd, load_prices
-from beacon.transcripts import (
+from lapbar import report_render
+from lapbar.pricing import PriceTable, cost_usd, load_prices
+from lapbar.transcripts import (
     CACHE_WRITE_1H_KEY,
     ROLE_HEAD,
     ROLE_SUBAGENT,

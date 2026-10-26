@@ -22,11 +22,11 @@ from pathlib import Path
 from typing import Iterable, Iterator, Mapping
 
 # The substitution table holds the maintainer's plain-text originals, so it lives
-# outside the repository: $BEACON_SCRUB_MAP or ~/.config/beacon/scrub_map.json.
-MAP_PATH = Path(os.environ.get("BEACON_SCRUB_MAP", "~/.config/beacon/scrub_map.json")).expanduser()
+# outside the repository: $LAPBAR_SCRUB_MAP or ~/.config/lapbar/scrub_map.json.
+MAP_PATH = Path(os.environ.get("LAPBAR_SCRUB_MAP", "~/.config/lapbar/scrub_map.json")).expanduser()
 
 _HANGUL = "가-힣"
-DIGEST_SALT = "beacon-scan:"
+DIGEST_SALT = "beacon-scan:"  # frozen: the private map digests were made under the old project name
 DIGEST_LEN = 20
 
 # Owner-specific terms ship only as salted digests, and only in the private map (`terms` section).
@@ -110,7 +110,7 @@ def parse_map(raw: Mapping) -> ScrubMap:
 
 def load_map(path: Path = MAP_PATH) -> ScrubMap:
     if not path.is_file():
-        raise FileNotFoundError(f"scrub map not found: {path} (set BEACON_SCRUB_MAP or pass --map)")
+        raise FileNotFoundError(f"scrub map not found: {path} (set LAPBAR_SCRUB_MAP or pass --map)")
     return parse_map(json.loads(path.read_text(encoding="utf-8")))
 
 

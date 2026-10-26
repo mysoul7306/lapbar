@@ -1,12 +1,13 @@
-"""`beacon bundle` (maintainer only): build the public assets from a live `~/.claude`.
+"""`lapbar bundle` (maintainer only): build the public assets from a live `~/.claude`.
 
-    beacon bundle --from ~/.claude            # scrub -> scan -> self-test -> write src/beacon/assets/
-    beacon bundle --check                     # scan the asset directory only (CI gate)
-    beacon bundle --from ~/.claude --preview DIR   # also write scrubbed copies to DIR for review
-    beacon bundle --from ~/.claude --map FILE      # use a substitution table kept outside the repo
+    lapbar bundle --from ~/.claude            # scrub -> scan -> self-test -> write src/lapbar/assets/
+    lapbar bundle --check                     # scan the asset directory only (CI gate)
+    lapbar bundle --from ~/.claude --preview DIR   # also write scrubbed copies to DIR for review
+    lapbar bundle --from ~/.claude --map FILE      # use a substitution table kept outside the repo
 
 Fail-closed: nothing is written to the asset directory unless the in-memory scan is clean and every
-hook that ships a `--self-test` passes on the scrubbed copy.
+hook that ships a `--self-test` passes on the scrubbed copy. A `--from` that is not a directory,
+or one where no manifest entry is found (every asset would be skipped), is an error.
 """
 from __future__ import annotations
 
@@ -18,12 +19,15 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from beacon import scrub
+from lapbar import scrub
 
 ASSETS_DIR = Path(__file__).with_name("assets")
 MANIFEST_NAME = "manifest.json"
 SELF_TEST_FLAG = "--self-test"
 SELF_TEST_TIMEOUT = 120
+HOME_FORM = "~/.claude/"
+# Asset folders whose `~/.claude/` references `lapbar install` pins to the absolute target.
+RENDERED_PREFIXES = ("agents/", "commands/")
 
 # Fallback when assets/manifest.json does not exist yet: (asset path, path in the live ~/.claude).
 # The live layout equals the install layout, so both sides are the same relative path.
@@ -55,6 +59,7 @@ class Built:
     entry: Entry
     text: str
     stale: tuple[int, ...]
+    skipped: bool = False  # no live original: `text` is the existing asset, kept as it is
 
 
 def manifest_entries(assets_dir: Path) -> tuple[Entry, ...]:
@@ -73,13 +78,34 @@ def manifest_entries(assets_dir: Path) -> tuple[Entry, ...]:
     return tuple(dict.fromkeys(entries))
 
 
-def build(entries: tuple[Entry, ...], live_root: Path, smap: scrub.ScrubMap) -> tuple[Built, ...]:
-    """Read and scrub every entry. Missing originals raise FileNotFoundError (the list is the contract)."""
-    return tuple(
-        Built(e, r.text, r.stale)
-        for e in entries
-        for r in [scrub.scrub_text((live_root / e.live).read_text(encoding="utf-8"), e.asset, smap)]
-    )
+def build(entries: tuple[Entry, ...], live_root: Path, smap: scrub.ScrubMap,
+          assets_dir: Path = ASSETS_DIR) -> tuple[Built, ...]:
+    """Read and scrub every entry.
+
+    An entry with no live original keeps its existing asset (`skipped`); when the asset is
+    missing too, FileNotFoundError is raised (the list is the contract).
+    """
+    return tuple(_build_one(e, live_root, smap, assets_dir) for e in entries)
+
+
+def _build_one(entry: Entry, live_root: Path, smap: scrub.ScrubMap, assets_dir: Path) -> Built:
+    live = live_root / entry.live
+    if not live.is_file():
+        kept = (assets_dir / entry.asset).read_text(encoding="utf-8")
+        return Built(entry, kept, (), skipped=True)
+    text = unrender(live.read_text(encoding="utf-8"), entry.asset, live_root)
+    result = scrub.scrub_text(text, entry.asset, smap)
+    return Built(entry, result.text, result.stale)
+
+
+def unrender(text: str, asset: str, live_root: Path) -> str:
+    """Undo `lapbar install` rendering: the live root's absolute prefix goes back to `~/.claude/`."""
+    if not asset.startswith(RENDERED_PREFIXES):
+        return text
+    roots = {str(live_root.absolute()), str(live_root.resolve())}
+    for root in sorted(roots, key=len, reverse=True):
+        text = text.replace(root.rstrip("/") + "/", HOME_FORM)
+    return text
 
 
 def write_all(built: tuple[Built, ...], root: Path) -> None:
@@ -129,26 +155,35 @@ def run_check(assets_dir: Path, map_path: Path = scrub.MAP_PATH, require_map: bo
 
 
 def run_bundle(live_root: Path, assets_dir: Path, preview: Path | None, map_path: Path) -> int:
+    if not live_root.is_dir():
+        print(f"ERROR live root is not a directory: {live_root}")
+        return 1
     smap = scrub.load_map(map_path)
-    built = build(manifest_entries(assets_dir), live_root, smap)
+    built = build(manifest_entries(assets_dir), live_root, smap, assets_dir)
+    fresh = tuple(item for item in built if not item.skipped)
     for item in built:
+        if item.skipped:
+            print(f"SKIP {item.entry.asset} (no live original, asset kept)")
         for index in item.stale:
             print(f"WARN stale per-file edit #{index} in scrub_map.json for {item.entry.asset}")
+    if not fresh:
+        print(f"ERROR no manifest entry found under {live_root}, nothing to bundle")
+        return 1
     if preview is not None:
-        write_all(built, preview)
+        write_all(fresh, preview)
         print(f"preview written to {preview}")
     hits = tuple(h for item in built for h in scrub.scan_text(item.text, item.entry.asset, smap.terms, smap.scan))
     if report_hits(hits):
         return 1
-    with tempfile.TemporaryDirectory(prefix="beacon-bundle-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="lapbar-bundle-") as tmp:
         write_all(built, Path(tmp))
         tests = run_self_tests(Path(tmp), built)
     for asset, passed, tail in tests:
         print(f"{'PASS' if passed else 'FAIL'} self-test {asset}: {tail}")
     if not all(passed for _, passed, _ in tests):
         return 1
-    write_all(built, assets_dir)
-    print(f"wrote {len(built)} asset(s) to {assets_dir}")
+    write_all(fresh, assets_dir)
+    print(f"wrote {len(fresh)} asset(s) to {assets_dir}, kept {len(built) - len(fresh)}")
     return 0
 
 
@@ -167,7 +202,7 @@ def configure(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--assets", default=str(ASSETS_DIR), help="asset directory (default: the package's)")
     parser.add_argument("--preview", default=None, help="also write scrubbed copies here for review")
     parser.add_argument("--map", dest="map_path", default=str(scrub.MAP_PATH),
-                        help="substitution table kept outside the repo (default: $BEACON_SCRUB_MAP or ~/.config/beacon/scrub_map.json)")
+                        help="substitution table kept outside the repo (default: $LAPBAR_SCRUB_MAP or ~/.config/lapbar/scrub_map.json)")
 
 
 def run(args: argparse.Namespace) -> int:
@@ -179,7 +214,7 @@ def run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m beacon.bundle", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(prog="python -m lapbar.bundle", description=__doc__.splitlines()[0])
     configure(parser)
     return run(parser.parse_args(argv))
 

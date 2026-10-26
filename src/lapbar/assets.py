@@ -1,13 +1,14 @@
 """Packaged asset manifest: loading, filtering and reading asset files.
 
 The manifest (`assets/manifest.json`) is the single source of truth for what
-`beacon install` copies and what `beacon doctor` checks. Every function takes an
+`lapbar install` copies and what `lapbar doctor` checks. Every function takes an
 optional `root` so tests can point at a fake asset directory.
 """
 from __future__ import annotations
 
+import copy
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
@@ -15,13 +16,28 @@ from typing import Iterable
 
 CATEGORIES: tuple[str, ...] = ("hooks", "scripts", "rules", "skills", "agents")
 MANIFEST_NAME = "manifest.json"
+HOOK_CATEGORY = "hooks"
+PROBE_EXPECTATIONS = frozenset({"deny", "allow"})
 
 AssetRoot = Traversable | Path
 
 
 @dataclass(frozen=True)
+class Probe:
+    """A sample hook stdin payload and the decision the hook must answer with."""
+
+    name: str
+    input: dict = field(hash=False)
+    expect: str = "deny"
+
+
+@dataclass(frozen=True)
 class Asset:
-    """One file shipped by beacon. `dst` is relative to the install target."""
+    """One file shipped by lapbar. `dst` is relative to the install target.
+
+    A hook whose `event` is None is installed but not wired into settings.json;
+    an agent definition's frontmatter runs it instead.
+    """
 
     category: str
     src: str
@@ -29,15 +45,22 @@ class Asset:
     event: str | None = None
     matcher: str | None = None
     selftest: bool = False
+    probes: tuple[Probe, ...] = ()
 
     @property
     def is_hook(self) -> bool:
-        return self.category == "hooks" and self.event is not None
+        """Installed as an executable hook; subject to self-tests and probes."""
+        return self.category == HOOK_CATEGORY
+
+    @property
+    def is_wired_hook(self) -> bool:
+        """A hook that `install` wires into (and `doctor` expects in) settings.json."""
+        return self.is_hook and self.event is not None
 
 
 def default_root() -> Traversable:
-    """Asset directory inside the installed `beacon` package."""
-    return resources.files("beacon").joinpath("assets")
+    """Asset directory inside the installed `lapbar` package."""
+    return resources.files("lapbar").joinpath("assets")
 
 
 def _resolve(root: AssetRoot | None) -> AssetRoot:
@@ -60,14 +83,37 @@ def _check_relative(rel: str, field: str) -> str:
     return rel
 
 
+def _parse_probe(src: str, raw: dict) -> Probe:
+    name, payload, expect = raw.get("name"), raw.get("input"), raw.get("expect")
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"manifest probe of {src} needs a non-empty name")
+    if not isinstance(payload, dict):
+        raise ValueError(f"manifest probe {name!r} of {src}: input must be an object")
+    if expect not in PROBE_EXPECTATIONS:
+        raise ValueError(f"manifest probe {name!r} of {src}: expect must be one of "
+                         f"{', '.join(sorted(PROBE_EXPECTATIONS))}, got {expect!r}")
+    return Probe(name=name, input=copy.deepcopy(payload), expect=expect)
+
+
+def _parse_probes(category: str, src: str, raw: dict) -> tuple[Probe, ...]:
+    probes = raw.get("probes") or ()
+    if probes and category != HOOK_CATEGORY:
+        raise ValueError(f"manifest {src}: probes are only allowed on hooks")
+    if not isinstance(probes, (list, tuple)):
+        raise ValueError(f"manifest {src}: probes must be a list")
+    return tuple(_parse_probe(src, p if isinstance(p, dict) else {}) for p in probes)
+
+
 def _parse_entry(category: str, raw: dict) -> Asset:
+    src = _check_relative(str(raw["src"]), "src")
     return Asset(
         category=category,
-        src=_check_relative(str(raw["src"]), "src"),
+        src=src,
         dst=_check_relative(str(raw.get("dst", raw["src"])), "dst"),
-        event=raw.get("event"),
+        event=raw.get("event") or None,
         matcher=raw.get("matcher") or None,
         selftest=bool(raw.get("selftest", False)),
+        probes=_parse_probes(category, src, raw),
     )
 
 
