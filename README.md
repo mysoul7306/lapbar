@@ -69,7 +69,7 @@ Measured by the person who built this harness (10 days since turning the hooks o
 | hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | forces model and effort literals, top tier needs a tag. `--self-test` 80 cases |
 | hook | `hooks/git-push-guard.py` (PreToolUse: Bash) | denies develop / main / master push, fail-closed. `--self-test` 60 cases |
 | hook | `hooks/memory-lint-hook.py` (SessionStart) + `scripts/memory-lint.py` | checks the memory directory, notifies only on problems |
-| hook | `hooks/git-readonly-guard.py` (agent-scoped PreToolUse: Bash, not wired into `settings.json`) | allowlist for read-only git inside the `scout-git` agent: pipes, redirects, write subcommands and unknown options are denied, `--no-ext-diff` is forced. `--self-test` 52 cases |
+| hook | `hooks/git-readonly-guard.py` (agent-scoped PreToolUse: Bash, not wired into `settings.json`) | allowlist for read-only git inside the `scout-git` agent: pipes, redirects, write subcommands and unknown options are denied, `--no-ext-diff` is forced. `--self-test` 76 cases |
 | rule | `rules/zsh-pitfalls.md` | silent-failure traps in the Bash tool's zsh (incident-based) |
 | rule | `rules/security.md` | output hygiene - keep values from leaking when you read config, env, wrappers |
 | rule | `rules/memory-scope.md` | four buckets for deciding which scope a memory belongs in |

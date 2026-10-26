@@ -6,7 +6,8 @@
     lapbar bundle --from ~/.claude --map FILE      # use a substitution table kept outside the repo
 
 Fail-closed: nothing is written to the asset directory unless the in-memory scan is clean and every
-hook that ships a `--self-test` passes on the scrubbed copy.
+hook that ships a `--self-test` passes on the scrubbed copy. A `--from` that is not a directory,
+or one where no manifest entry is found (every asset would be skipped), is an error.
 """
 from __future__ import annotations
 
@@ -154,6 +155,9 @@ def run_check(assets_dir: Path, map_path: Path = scrub.MAP_PATH, require_map: bo
 
 
 def run_bundle(live_root: Path, assets_dir: Path, preview: Path | None, map_path: Path) -> int:
+    if not live_root.is_dir():
+        print(f"ERROR live root is not a directory: {live_root}")
+        return 1
     smap = scrub.load_map(map_path)
     built = build(manifest_entries(assets_dir), live_root, smap, assets_dir)
     fresh = tuple(item for item in built if not item.skipped)
@@ -162,6 +166,9 @@ def run_bundle(live_root: Path, assets_dir: Path, preview: Path | None, map_path
             print(f"SKIP {item.entry.asset} (no live original, asset kept)")
         for index in item.stale:
             print(f"WARN stale per-file edit #{index} in scrub_map.json for {item.entry.asset}")
+    if not fresh:
+        print(f"ERROR no manifest entry found under {live_root}, nothing to bundle")
+        return 1
     if preview is not None:
         write_all(fresh, preview)
         print(f"preview written to {preview}")
