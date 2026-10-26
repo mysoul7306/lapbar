@@ -26,6 +26,7 @@ lapbar install --dry-run          # what would be installed, nothing written
 lapbar install                    # hooks + rules + skills + agent into ~/.claude, settings.json wired (backup kept)
 lapbar doctor                     # everything in place, hook self-tests pass
 lapbar report --since 2026-10-13  # your own savings, from your own transcripts
+lapbar session                    # one session: hook injection, rules loaded, subagent models, tokens
 ```
 
 ## 왜 만들었나
@@ -68,6 +69,7 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 | hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | model, effort 리터럴 강제, 상위 티어는 표지 필요. `--self-test` 80 케이스 |
 | hook | `hooks/git-push-guard.py` (PreToolUse: Bash) | develop / main / master push deny, fail-closed. `--self-test` 60 케이스 |
 | hook | `hooks/memory-lint-hook.py` (SessionStart) + `scripts/memory-lint.py` | 메모리 디렉토리 점검, 문제 있을 때만 알림 |
+| hook | `hooks/git-readonly-guard.py` (에이전트 전용 PreToolUse: Bash, `settings.json` 에는 안 들어감) | `scout-git` 에이전트 안에서 읽기 전용 git 만 통과시키는 allowlist: 파이프, 리다이렉트, 쓰기 서브커맨드, 모르는 옵션은 deny, `--no-ext-diff` 강제. `--self-test` 52 케이스 |
 | rule | `rules/zsh-pitfalls.md` | Bash 툴의 zsh 에서 조용히 어긋나는 함정 모음 (실사고 기반) |
 | rule | `rules/security.md` | 출력 위생 - 설정, env, wrapper 를 볼 때 값이 새지 않게 |
 | rule | `rules/memory-scope.md` | 메모리를 어느 scope 에 둘지 판정하는 4 바구니 |
@@ -75,8 +77,13 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 | rule | `rules/git-workflow.md` | 브랜치, 커밋, worktree, push 권한 |
 | skill | `commands/lane.md`, `commands/review-lane.md` + `scripts/*-workflow.js` | 레인 루프, 검수 레인 절차 |
 | agent | `agents/review-readonly.md` | Read, Grep, Glob 만 가진 읽기 전용 리뷰어 (레인의 refute, review 역할) |
+| agent | `agents/scout-git.md` | 계획 단계의 git 이력 정찰 ("이거 전에 있었나, 언제 왜 넣고 뺐나"). Bash 는 frontmatter 에 적힌 위 hook 이 읽기 전용 git 으로 묶는다 |
 
 `lapbar install` 은 **기존 파일을 덮지 않는다** (내용이 다르면 건너뛰고 알려 준다, `--force` 로만 덮음). `settings.json` 은 쓰기 전에 `settings.json.bak-<시각>` 을 남기고, 같은 hook 배선이 이미 있으면 다시 넣지 않는다.
+
+`lapbar doctor` 는 자산이 제자리에 있고 배선됐는지, hook 마다 `--self-test` 가 통과하는지에 더해, 가드마다 표본 입력을 넣어 실제로 deny / allow 하는지 (가드가 로드에 실패하면 조용히 가드 없이 진행되는 걸 잡으려고), 그리고 `settings.json` 의 모든 hook 명령 (lapbar 것이 아니어도) 이 실존하고 컴파일되는 파일을 가리키는지 본다.
+
+`lapbar session` 은 세션 transcript 하나 (Claude Code 안에서 돌리면 현재 세션, 아니면 `--latest` 나 경로) 를 읽어 40줄 안에 hook 별 주입 글자 수 (머리 세션만, 서브에이전트 transcript 의 hook 은 아직 안 센다), 로드된 지시 파일과 크기, 서브에이전트 종류 × 모델 × effort, 양쪽 토큰을 보여 준다. 메모리를 정리하거나 rules 를 다듬기 전에 보라고 만든 것.
 
 ## 쓰는 법 (짧게)
 
@@ -85,7 +92,8 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 1. `lapbar install` → Claude Code 재시작
 2. 서브에이전트를 부를 때 model 과 effort 를 적는다. 안 적으면 hook 이 막고 이유를 보여 준다
 3. 리뷰는 `/review-lane`, 긴 작업은 `/lane` 으로
-4. 가끔 `lapbar report` 로 숫자를 본다
+4. 가끔 `lapbar report` 로 숫자를, `lapbar session` 으로 한 세션을 본다
+5. 계획 중 "이거 전에 있었나?" 는 `scout-git` 에이전트에 맡긴다. git 이 읽기 전용이라 안전하다
 
 규칙 파일은 한국어다 (이 하네스를 쓴 사람의 작업 언어). 필요하면 복사해서 고쳐 쓰면 된다 - 그래서 `install` 이 덮어쓰기를 하지 않는다.
 

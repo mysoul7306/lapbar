@@ -19,3 +19,4 @@ jobs:
         run: |
           python3 src/lapbar/assets/hooks/subagent-model-guard.py --self-test </dev/null
           python3 src/lapbar/assets/hooks/git-push-guard.py --self-test </dev/null
+          python3 src/lapbar/assets/hooks/git-readonly-guard.py --self-test </dev/null

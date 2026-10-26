@@ -26,6 +26,7 @@ lapbar install --dry-run            # what would be installed, nothing written
 lapbar install                      # hooks + rules + skills + agent into ~/.claude, settings.json wired (backup kept)
 lapbar doctor                       # everything in place, hook self-tests pass
 lapbar report --since 2026-10-13    # your own savings, from your own transcripts
+lapbar session                      # one session: hook injection, rules loaded, subagent models, tokens
 ```
 
 ## Why
@@ -68,6 +69,7 @@ Measured by the person who built this harness (10 days since turning the hooks o
 | hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | forces model and effort literals, top tier needs a tag. `--self-test` 80 cases |
 | hook | `hooks/git-push-guard.py` (PreToolUse: Bash) | denies develop / main / master push, fail-closed. `--self-test` 60 cases |
 | hook | `hooks/memory-lint-hook.py` (SessionStart) + `scripts/memory-lint.py` | checks the memory directory, notifies only on problems |
+| hook | `hooks/git-readonly-guard.py` (agent-scoped PreToolUse: Bash, not wired into `settings.json`) | allowlist for read-only git inside the `scout-git` agent: pipes, redirects, write subcommands and unknown options are denied, `--no-ext-diff` is forced. `--self-test` 52 cases |
 | rule | `rules/zsh-pitfalls.md` | silent-failure traps in the Bash tool's zsh (incident-based) |
 | rule | `rules/security.md` | output hygiene - keep values from leaking when you read config, env, wrappers |
 | rule | `rules/memory-scope.md` | four buckets for deciding which scope a memory belongs in |
@@ -75,8 +77,13 @@ Measured by the person who built this harness (10 days since turning the hooks o
 | rule | `rules/git-workflow.md` | branches, commits, worktrees, push permissions |
 | skill | `commands/lane.md`, `commands/review-lane.md` + `scripts/*-workflow.js` | the lane loop and review-lane procedures |
 | agent | `agents/review-readonly.md` | a read-only reviewer with only Read, Grep, Glob (the lane's refute / review role) |
+| agent | `agents/scout-git.md` | a git history scout for planning ("did this exist before, when and why") whose Bash is limited to read-only git by the hook above, declared in its own frontmatter |
 
 `lapbar install` **never overwrites your files** (if contents differ it skips and tells you; use `--force` to overwrite). Before writing `settings.json` it keeps a `settings.json.bak-<time>`, and it won't re-add a hook wiring that is already there.
+
+`lapbar doctor` checks that every asset is in place and wired, runs each hook's `--self-test`, feeds each guard a sample input and checks that it really denies or allows (a guard that fails to load is otherwise silent), and verifies that every hook command in `settings.json` (lapbar's or not) points at a file that exists and compiles.
+
+`lapbar session` reads one session transcript (the current one when run inside Claude Code, else `--latest` or a path) and prints, in under 40 lines, how many characters each hook injected (head session only; subagent transcripts are not scanned for hooks yet), which instruction files were loaded and how big they are, which subagent types ran on which model and effort, and the token usage on both sides. Use it before cleaning up memory or trimming rules.
 
 ## Using it (short)
 
@@ -85,7 +92,8 @@ Assumes a Claude Code where the `Agent` tool has an `effort` parameter and the `
 1. `lapbar install` → restart Claude Code
 2. When you call a subagent, name the model and effort. If you don't, the hook blocks it and shows why.
 3. Review with `/review-lane`, long tasks with `/lane`.
-4. Occasionally look at the numbers with `lapbar report`.
+4. Occasionally look at the numbers with `lapbar report`, and at one session with `lapbar session`.
+5. For "was this ever here before?" questions during planning, hand the question to the `scout-git` agent; its git is read-only.
 
 The rule files are in Korean (the working language of the person who uses this harness). Copy and edit them as you like - that is why `install` never overwrites.
 
