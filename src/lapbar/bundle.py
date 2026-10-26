@@ -24,6 +24,9 @@ ASSETS_DIR = Path(__file__).with_name("assets")
 MANIFEST_NAME = "manifest.json"
 SELF_TEST_FLAG = "--self-test"
 SELF_TEST_TIMEOUT = 120
+HOME_FORM = "~/.claude/"
+# Asset folders whose `~/.claude/` references `lapbar install` pins to the absolute target.
+RENDERED_PREFIXES = ("agents/", "commands/")
 
 # Fallback when assets/manifest.json does not exist yet: (asset path, path in the live ~/.claude).
 # The live layout equals the install layout, so both sides are the same relative path.
@@ -55,6 +58,7 @@ class Built:
     entry: Entry
     text: str
     stale: tuple[int, ...]
+    skipped: bool = False  # no live original: `text` is the existing asset, kept as it is
 
 
 def manifest_entries(assets_dir: Path) -> tuple[Entry, ...]:
@@ -73,13 +77,34 @@ def manifest_entries(assets_dir: Path) -> tuple[Entry, ...]:
     return tuple(dict.fromkeys(entries))
 
 
-def build(entries: tuple[Entry, ...], live_root: Path, smap: scrub.ScrubMap) -> tuple[Built, ...]:
-    """Read and scrub every entry. Missing originals raise FileNotFoundError (the list is the contract)."""
-    return tuple(
-        Built(e, r.text, r.stale)
-        for e in entries
-        for r in [scrub.scrub_text((live_root / e.live).read_text(encoding="utf-8"), e.asset, smap)]
-    )
+def build(entries: tuple[Entry, ...], live_root: Path, smap: scrub.ScrubMap,
+          assets_dir: Path = ASSETS_DIR) -> tuple[Built, ...]:
+    """Read and scrub every entry.
+
+    An entry with no live original keeps its existing asset (`skipped`); when the asset is
+    missing too, FileNotFoundError is raised (the list is the contract).
+    """
+    return tuple(_build_one(e, live_root, smap, assets_dir) for e in entries)
+
+
+def _build_one(entry: Entry, live_root: Path, smap: scrub.ScrubMap, assets_dir: Path) -> Built:
+    live = live_root / entry.live
+    if not live.is_file():
+        kept = (assets_dir / entry.asset).read_text(encoding="utf-8")
+        return Built(entry, kept, (), skipped=True)
+    text = unrender(live.read_text(encoding="utf-8"), entry.asset, live_root)
+    result = scrub.scrub_text(text, entry.asset, smap)
+    return Built(entry, result.text, result.stale)
+
+
+def unrender(text: str, asset: str, live_root: Path) -> str:
+    """Undo `lapbar install` rendering: the live root's absolute prefix goes back to `~/.claude/`."""
+    if not asset.startswith(RENDERED_PREFIXES):
+        return text
+    roots = {str(live_root.absolute()), str(live_root.resolve())}
+    for root in sorted(roots, key=len, reverse=True):
+        text = text.replace(root.rstrip("/") + "/", HOME_FORM)
+    return text
 
 
 def write_all(built: tuple[Built, ...], root: Path) -> None:
@@ -130,12 +155,15 @@ def run_check(assets_dir: Path, map_path: Path = scrub.MAP_PATH, require_map: bo
 
 def run_bundle(live_root: Path, assets_dir: Path, preview: Path | None, map_path: Path) -> int:
     smap = scrub.load_map(map_path)
-    built = build(manifest_entries(assets_dir), live_root, smap)
+    built = build(manifest_entries(assets_dir), live_root, smap, assets_dir)
+    fresh = tuple(item for item in built if not item.skipped)
     for item in built:
+        if item.skipped:
+            print(f"SKIP {item.entry.asset} (no live original, asset kept)")
         for index in item.stale:
             print(f"WARN stale per-file edit #{index} in scrub_map.json for {item.entry.asset}")
     if preview is not None:
-        write_all(built, preview)
+        write_all(fresh, preview)
         print(f"preview written to {preview}")
     hits = tuple(h for item in built for h in scrub.scan_text(item.text, item.entry.asset, smap.terms, smap.scan))
     if report_hits(hits):
@@ -147,8 +175,8 @@ def run_bundle(live_root: Path, assets_dir: Path, preview: Path | None, map_path
         print(f"{'PASS' if passed else 'FAIL'} self-test {asset}: {tail}")
     if not all(passed for _, passed, _ in tests):
         return 1
-    write_all(built, assets_dir)
-    print(f"wrote {len(built)} asset(s) to {assets_dir}")
+    write_all(fresh, assets_dir)
+    print(f"wrote {len(fresh)} asset(s) to {assets_dir}, kept {len(built) - len(fresh)}")
     return 0
 
 
