@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.1.0 - Unreleased
+## 0.1.1 - Unreleased
+
+- Hook messages, docstrings and comments are English (`subagent-model-guard`, `git-push-guard`, `memory-lint-hook`, `memory-lint`). Rule files and the lane procedures stay in Korean.
+- `lapbar bundle` keeps assets marked `keep` in the manifest (hooks and the `scout-git` agent are authored in this repo, not extracted from a live `~/.claude`).
+
+## 0.1.0 - 2026-10-26
 
 First release, as `lapbar`, under the MIT license. The prototype was published on 2026-10-22 as `beacon` under PolyForm Noncommercial 1.0.0.
 

@@ -55,6 +55,18 @@ class SkipTest(BundleBuildCase):
         self.assertEqual(built[HOOK_ASSET].text, KEPT_HOOK)
         self.assertFalse(built[AGENT_ASSET].skipped)
 
+    def test_keep_entry_ignores_a_present_live_copy(self) -> None:
+        self.write_live_agent("~/.claude/")
+        self.write(self.live / HOOK_ASSET, "print('live, must not be read')\n")
+        manifest = {"hooks": [{"src": HOOK_ASSET, "dst": HOOK_ASSET, "event": None, "keep": True}],
+                    "agents": [{"src": AGENT_ASSET, "dst": AGENT_ASSET}]}
+        self.write(self.assets / "manifest.json", json.dumps(manifest))
+        built = {b.entry.asset: b for b in self.build()}
+        self.assertTrue(built[HOOK_ASSET].entry.keep)
+        self.assertTrue(built[HOOK_ASSET].skipped)
+        self.assertEqual(built[HOOK_ASSET].text, KEPT_HOOK)
+        self.assertFalse(built[AGENT_ASSET].skipped)
+
     def test_missing_live_original_and_asset_raises(self) -> None:
         self.write_live_agent("~/.claude/")
         (self.assets / HOOK_ASSET).unlink()

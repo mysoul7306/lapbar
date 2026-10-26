@@ -52,6 +52,10 @@ DEFAULT_ASSETS: tuple[str, ...] = (
 class Entry:
     asset: str  # path under the asset directory
     live: str   # path under the live ~/.claude
+    keep: bool = False  # authored in this repo: the live copy is never read
+
+
+KEEP_KEY = "keep"
 
 
 @dataclass(frozen=True)
@@ -59,7 +63,7 @@ class Built:
     entry: Entry
     text: str
     stale: tuple[int, ...]
-    skipped: bool = False  # no live original: `text` is the existing asset, kept as it is
+    skipped: bool = False  # kept entry or no live original: `text` is the existing asset
 
 
 def manifest_entries(assets_dir: Path) -> tuple[Entry, ...]:
@@ -74,7 +78,7 @@ def manifest_entries(assets_dir: Path) -> tuple[Entry, ...]:
             continue
         for item in group:
             if isinstance(item, dict) and item.get("src"):
-                entries.append(Entry(item["src"], item.get("dst") or item["src"]))
+                entries.append(Entry(item["src"], item.get("dst") or item["src"], bool(item.get(KEEP_KEY))))
     return tuple(dict.fromkeys(entries))
 
 
@@ -82,15 +86,16 @@ def build(entries: tuple[Entry, ...], live_root: Path, smap: scrub.ScrubMap,
           assets_dir: Path = ASSETS_DIR) -> tuple[Built, ...]:
     """Read and scrub every entry.
 
-    An entry with no live original keeps its existing asset (`skipped`); when the asset is
-    missing too, FileNotFoundError is raised (the list is the contract).
+    A `keep` entry (authored here, e.g. an English hook whose live copy differs) and an entry
+    with no live original both keep the existing asset (`skipped`); when the asset is missing
+    too, FileNotFoundError is raised (the list is the contract).
     """
     return tuple(_build_one(e, live_root, smap, assets_dir) for e in entries)
 
 
 def _build_one(entry: Entry, live_root: Path, smap: scrub.ScrubMap, assets_dir: Path) -> Built:
     live = live_root / entry.live
-    if not live.is_file():
+    if entry.keep or not live.is_file():
         kept = (assets_dir / entry.asset).read_text(encoding="utf-8")
         return Built(entry, kept, (), skipped=True)
     text = unrender(live.read_text(encoding="utf-8"), entry.asset, live_root)
@@ -163,7 +168,8 @@ def run_bundle(live_root: Path, assets_dir: Path, preview: Path | None, map_path
     fresh = tuple(item for item in built if not item.skipped)
     for item in built:
         if item.skipped:
-            print(f"SKIP {item.entry.asset} (no live original, asset kept)")
+            why = "authored in this repo" if item.entry.keep else "no live original"
+            print(f"SKIP {item.entry.asset} ({why}, asset kept)")
         for index in item.stale:
             print(f"WARN stale per-file edit #{index} in scrub_map.json for {item.entry.asset}")
     if not fresh:

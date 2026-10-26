@@ -1,32 +1,35 @@
 #!/usr/bin/env python3
-"""subagent model 가드 (PreToolUse: Task | Agent | Workflow).
+"""Subagent model guard (PreToolUse: Task | Agent | Workflow).
 
-배경: subagent 는 model 을 생략하면 부모 (세션) 모델을 그대로 상속한다. 모델 티어 규칙이 권고만으로는
-여러 번 재발해서 harness 레벨에서 막는다.
+Background: a subagent that omits model inherits the parent (session) model as is. Model tier rules kept
+recurring when they were only advice, so this blocks it at the harness level.
 
-막는 것은 **생략, 불명확** 과 **사용자 허용 없는 상위/하위 티어** 다 — model 을 opus / sonnet 리터럴로 적으면 통과,
-fable / haiku 는 그 호출 안의 허용 표지 (`[owner-approved: fable]`, `[owner-approved: haiku]`) 와 함께일 때만.
+What it blocks is **omitted or unclear values** and **upper/lower tiers without owner approval** - a literal opus / sonnet
+model passes, fable / haiku only together with an approval mark inside that call (`[owner-approved: fable]`, `[owner-approved: haiku]`).
 
-검사 규칙:
-  ① model, effort 는 **opts 최상위의 문자열 리터럴만** 인정 — 변수, 삼항식, 괄호식, 중첩 객체 (metadata.model),
-     중첩 agent() 의 값은 전부 deny. 값은 문자열과 주석을 걷어낸 코드에서 찾은 key 위치에서만 읽는다
-     (prompt 문자열 속 "model: 'opus'" 글자에 안 속음). 값 앞 주석 (`effort: /*j*/ 'high'`) 은 리터럴로 읽는다.
-  ② inherit, 허용 외 이름 deny. full model ID (claude-haiku-4-5 류) 는 계열로 정규화해 같은 규칙 적용.
-  ③ Workflow 한 스크립트에 fable agent() **호출 위치 FABLE_MAX 곳까지**. 루프 안 1곳이 N번 도는 건 정적으로
-     못 센다 — 실행 횟수 상한은 규칙 (rules/subagent-review.md) 과 규모 예고 몫.
-  ④ fable, haiku 는 **그 호출 안** (Agent 는 prompt, agent() 는 괄호 안) 에 표지가 있을 때만.
-     모델이 표지를 스스로 적을 수 있다는 한계는 알고 둔다 — 규칙 위반으로 다룬다.
-  ⑤ effort 는 EFFORTS 안 소문자 리터럴. 상한 EFFORT_CAP (기본 xhigh, env SUBAGENT_EFFORT_CAP 으로 조절 —
-     settings.json env 에 두면 모든 세션에) 위 단계는 그 호출 안에 `[owner-approved: <단계>]` 표지가 있을 때만.
-  ⑥ opts 는 **평평한 객체 리터럴 하나** — 삼항식으로 고른 객체 (`c ? {…} : {…}`), spread (`...`), 계산 키
-     (`['effort']`), get/set, 식별자 이스케이프는 shape deny (뒤 값이 앞 리터럴을 덮는 우회). shorthand (`{effort}`) 는
-     [변수] 라고 알려 준다.
-  ⑦ fail-closed: 문자열·주석이 닫히지 않은 스크립트 (정규식 리터럴 `/[/*]/` 류), 읽을 수 없는 scriptPath,
-     hook 내부 예외는 전부 deny. 저장된 workflow 이름 호출은 `~/.claude/workflows/<name>.js`,
-     `<cwd>/.claude/workflows/<name>.js` 를 찾아 검사하고, 없으면 (내장) 통과.
-  ⑧ deny 문구 = 사유 + 고칠 위치 + 짧은 GUIDE 한 줄. 상세 규칙은 rules/subagent-review.md 로.
+Check rules:
+  1. model and effort count only as **string literals at the top level of opts** - variables, ternaries, parenthesized
+     expressions, nested objects (metadata.model), and values inside nested agent() calls are all denied. Values are read
+     only at key positions found in the code with strings and comments blanked out (the text "model: 'opus'" inside a
+     prompt string does not fool it). A comment before the value (`effort: /*j*/ 'high'`) is read as a literal.
+  2. inherit and names outside the allow list are denied. Full model IDs (claude-haiku-4-5 and similar) are normalized
+     to their family and get the same rules.
+  3. Up to FABLE_MAX fable agent() **call sites** per Workflow script. One site inside a loop that runs N times cannot be
+     counted statically - the run-count limit is left to the rule (rules/subagent-review.md) and to announcing the scale.
+  4. fable and haiku only with a mark **inside that call** (prompt for Agent, inside the parentheses for agent()).
+     The model could write the mark itself; that limit is known, and writing a mark without owner approval is treated as a rule violation.
+  5. effort is a lowercase literal from EFFORTS. Levels above the cap EFFORT_CAP (default xhigh, set with env
+     SUBAGENT_EFFORT_CAP - put it in settings.json env to cover every session) need a `[owner-approved: <level>]` mark
+     inside that call.
+  6. opts must be **one flat object literal** - an object chosen by a ternary (`c ? {…} : {…}`), spread (`...`), computed
+     keys (`['effort']`), get/set, and identifier escapes get a shape deny (bypasses where a later value overrides the
+     earlier literal). Shorthand (`{effort}`) is reported as [a variable].
+  7. fail-closed: a script with an unclosed string or comment (regex literals like `/[/*]/`), an unreadable scriptPath,
+     and internal hook exceptions are all denied. A call by saved workflow name looks up `~/.claude/workflows/<name>.js`
+     and `<cwd>/.claude/workflows/<name>.js` and checks it; if neither exists (built in) it passes.
+  8. deny text = reason + where to fix + one short GUIDE line. Detailed rules live in rules/subagent-review.md.
 
-`python3 subagent-model-guard.py --self-test` = 회귀 케이스 (self-test 의 must_contain 은 GUIDE 에 없는 사유 전용 문구).
+`python3 subagent-model-guard.py --self-test` = regression cases (must_contain in the self-test is reason-only text that is not in GUIDE).
 """
 import json
 import os
@@ -34,29 +37,29 @@ import re
 import sys
 
 GUIDE = (
-    "규칙: model 은 opus / sonnet 리터럴로 (생략·inherit·변수 금지). "
-    "단건 Agent = opus, Workflow agent() = opus, 기계적 수집·파싱 = sonnet. "
-    "fable 은 사용자가 그 작업에 허용했을 때만 — 그 호출 안에 '[owner-approved: fable]' 표지 (workflow 2곳까지), "
-    "haiku 도 '[owner-approved: haiku]' 표지가 있을 때만. "
-    "effort 도 리터럴로 (low/medium/high/xhigh, max 는 '[owner-approved: max]' 표지 — 작업 agent high, 기계적 수집 low, judge·critic xhigh. 생략 = 세션 effort 상속). "
-    "한도는 요금제마다 달라 /usage 먼저. 상세 = ~/.claude/rules/subagent-review.md"
+    "Rules: model is an opus / sonnet literal (no omission, inherit, or variables). "
+    "Single Agent = opus, Workflow agent() = opus, mechanical collection/parsing = sonnet. "
+    "fable only when the owner approved it for that task - a '[owner-approved: fable]' mark inside that call (up to 2 sites per workflow), "
+    "haiku also only with a '[owner-approved: haiku]' mark. "
+    "effort is a literal too (low/medium/high/xhigh, max needs a '[owner-approved: max]' mark - work agents high, mechanical collection low, judge/critic xhigh. omitted = inherits the session effort). "
+    "Limits differ by plan, so check /usage first. Details = ~/.claude/rules/subagent-review.md"
 )
 
 TIERS = ("fable", "opus", "sonnet", "haiku")
-FABLE_MAX = 2                      # Workflow 한 스크립트의 fable agent() 호출 위치 상한
-HAIKU_MARK = "[owner-approved: haiku]"   # haiku 허용 표지 — 그 호출 (Agent 는 prompt) 안에 있어야 한다
-FABLE_MARK = "[owner-approved: fable]"   # fable 허용 표지 — haiku 와 같은 규칙
-EFFORTS = ("low", "medium", "high", "xhigh", "max")   # 낮은 것부터. Agent/Task 의 effort, workflow agent() 의 effort: 는 이 중 하나의 리터럴
-EFFORT_CAP_DEFAULT = "xhigh"       # 이 위 단계 (max) 는 그 호출 안의 표지 ([owner-approved: max]) 가 있어야. env SUBAGENT_EFFORT_CAP 로 조절
-EFFORT_MARK = "[owner-approved: %s]"      # effort 상한 위 단계의 허용 표지 (fable, haiku 표지와 같은 꼴)
+FABLE_MAX = 2                      # cap on fable agent() call sites in one Workflow script
+HAIKU_MARK = "[owner-approved: haiku]"   # haiku approval mark - must be inside that call (prompt for Agent)
+FABLE_MARK = "[owner-approved: fable]"   # fable approval mark - same rule as haiku
+EFFORTS = ("low", "medium", "high", "xhigh", "max")   # lowest first. Agent/Task effort and workflow agent() effort: must be one of these as a literal
+EFFORT_CAP_DEFAULT = "xhigh"       # levels above this (max) need the mark ([owner-approved: max]) inside that call. Set with env SUBAGENT_EFFORT_CAP
+EFFORT_MARK = "[owner-approved: %s]"      # approval mark for levels above the effort cap (same form as the fable and haiku marks)
 
-AGENT_CALL = re.compile(r'(?<![\w$])agent\s*\(')  # x.agent( 도 호출로 세어 같은 검사를 받는다
-# agent 를 호출이 아닌 자리 (별칭 대입, 인자, 속성 접근) 에 쓰면 호출 지점을 못 세니 deny (2026-10-22 보안 리뷰).
+AGENT_CALL = re.compile(r'(?<![\w$])agent\s*\(')  # x.agent( also counts as a call and gets the same checks
+# agent used outside a call (alias assignment, argument, property access) hides call sites, so deny (2026-10-22 security review).
 AGENT_ALIAS = re.compile(r'(?<![\w$])agent\b(?!\s*\()')
-# 동적 접근 (eval, Function, globalThis, 계산 속성) 은 호출 지점을 못 세니 deny.
+# Dynamic access (eval, Function, globalThis, computed property) hides call sites, so deny.
 DYNAMIC_ACCESS = re.compile(r'(?<![\w$.])(eval|Function|globalThis)\s*[(\[.]|\[\s*[\'"`]?agent[\'"`]?\s*\]')
-LITERAL = re.compile(r"""\s*(['"`])([A-Za-z0-9_.\-]+)\1""")         # 값 자리의 문자열 리터럴
-OPT_KEYS = ("model", "effort")                                       # agent() opts 최상위에서 리터럴을 요구하는 키
+LITERAL = re.compile(r"""\s*(['"`])([A-Za-z0-9_.\-]+)\1""")         # string literal in a value position
+OPT_KEYS = ("model", "effort")                                       # keys that must be literals at the top level of agent() opts
 
 
 def deny(reason):
@@ -70,10 +73,10 @@ def deny(reason):
     sys.exit(0)
 
 
-# ----------------------------------------------------------------------------- 소스 읽기
+# ----------------------------------------------------------------------------- reading the source
 
 def read_script(tool_input):
-    """(script, source, error) — script 가 None 이면 검사 대상 아님 (error 가 있으면 deny 사유)."""
+    """(script, source, error) - script None means nothing to check (an error, if present, is the deny reason)."""
     script = tool_input.get("script")
     if script:
         return script, "script", None
@@ -83,7 +86,7 @@ def read_script(tool_input):
             with open(path, encoding="utf-8") as fh:
                 return fh.read(), "scriptPath", None
         except (OSError, UnicodeDecodeError) as e:
-            return None, "scriptPath", "scriptPath 를 읽을 수 없어 (%s): %s" % (e.__class__.__name__, path)
+            return None, "scriptPath", "cannot read scriptPath (%s): %s" % (e.__class__.__name__, path)
     name = tool_input.get("name")
     if name:
         for base in (os.path.expanduser("~/.claude/workflows"), os.path.join(os.getcwd(), ".claude", "workflows")):
@@ -93,24 +96,24 @@ def read_script(tool_input):
                     with open(p, encoding="utf-8") as fh:
                         return fh.read(), "name:" + p, None
                 except (OSError, UnicodeDecodeError) as e:
-                    return None, "name", "저장된 workflow %s 를 읽을 수 없어 (%s)" % (p, e.__class__.__name__)
-    return None, None, None   # 내장 workflow 등 — 소스를 알 수 없으면 검사하지 않는다
+                    return None, "name", "cannot read saved workflow %s (%s)" % (p, e.__class__.__name__)
+    return None, None, None   # built-in workflows etc. - if the source is unknown, nothing is checked
 
 
-# ----------------------------------------------------------------------------- 코드 영역 추출
+# ----------------------------------------------------------------------------- extracting the code region
 
 def blank_strings_and_comments(src):
-    """(문자열·주석 내용을 공백으로 바꾼 같은 길이의 텍스트, 끝 상태) 를 돌려준다.
+    """Return (text of the same length with string and comment contents replaced by spaces, end state).
 
-    개행은 보존해 줄 번호와 오프셋이 원문과 1:1 로 맞는다. 템플릿 리터럴의 ${ … } 안은 코드라서
-    그대로 둔다 (중첩 중괄호 추적). 정규식 리터럴은 다루지 않는다 — `/[/*]/` 처럼 주석·문자열을
-    여는 꼴이면 끝 상태가 "code" 가 아니라서 호출자가 deny 한다 (fail-closed).
+    Newlines are kept so line numbers and offsets match the original 1:1. Inside a template literal, ${ … } is code
+    and stays as is (nested braces are tracked). Regex literals are not handled - a form like `/[/*]/` that opens a
+    comment or string leaves the end state other than "code", so the caller denies (fail-closed).
     """
     out = []
     n = len(src)
     i = 0
     state = "code"
-    stack = []            # 템플릿 안 ${ 로 들어간 코드 레벨의 중괄호 깊이
+    stack = []            # brace depth of each code level entered through ${ inside a template
     while i < n:
         c = src[i]
         nxt = src[i + 1] if i + 1 < n else ""
@@ -120,7 +123,7 @@ def blank_strings_and_comments(src):
             if c == "/" and nxt == "*":
                 state = "block"; out.append("  "); i += 2; continue
             if c in ("'", '"', "`"):
-                state = c; out.append(c); i += 1; continue        # 따옴표 자체는 남긴다 (리터럴 위치 추적용)
+                state = c; out.append(c); i += 1; continue        # keep the quote itself (to track literal positions)
             if stack:
                 if c == "{":
                     stack[-1] += 1
@@ -139,7 +142,7 @@ def blank_strings_and_comments(src):
             if c == "*" and nxt == "/":
                 state = "code"; out.append("  "); i += 2; continue
             out.append(c if c == "\n" else " "); i += 1; continue
-        # 문자열 상태 (' " `)
+        # string states (' " `)
         if c == "\\":
             out.append(" "); out.append("\n" if nxt == "\n" else " "); i += 2; continue
         if state == "`" and c == "$" and nxt == "{":
@@ -151,7 +154,7 @@ def blank_strings_and_comments(src):
 
 
 def _depths_at(text, idx):
-    """text[:idx] 의 (중괄호, 소괄호, 대괄호) 깊이."""
+    """(brace, paren, bracket) depth of text[:idx]."""
     b = p = k = 0
     for ch in text[:idx]:
         if ch == "{": b += 1
@@ -164,10 +167,11 @@ def _depths_at(text, idx):
 
 
 def _literal_value(code, raw, pos):
-    """pos (model: 의 콜론 뒤) 에서 시작하는 값이 **문자열 리터럴 하나** 면 그 값, 아니면 None.
+    """If the value starting at pos (after the colon of model:) is **a single string literal**, return it, else None.
 
-    리터럴 뒤에 , } 또는 끝만 올 수 있다 — 'opus' ? 'haiku' : 'sonnet' 같은 식은 리터럴이 아니다.
-    값 앞 공백과 주석은 블랭크 코드 (주석 = 공백) 에서 건너뛰고, 따옴표 자리부터 원문에서 읽는다 (effort: /*j*/ 'high' 도 리터럴).
+    Only , } or the end may follow the literal - an expression like 'opus' ? 'haiku' : 'sonnet' is not a literal.
+    Whitespace and comments before the value are skipped in the blanked code (comment = spaces), and the value is read
+    from the original starting at the quote (effort: /*j*/ 'high' is a literal too).
     """
     q = pos
     while q < len(code) and code[q] in " \t\r\n":
@@ -182,15 +186,15 @@ def _literal_value(code, raw, pos):
 
 
 def _opt_literal(code, script, start, end, key):
-    """agent() 괄호 안 (code[start:end]) 의 opts **최상위** `key:` (또는 'key':) 값 → (status, value), status ∈ missing | expr | ok.
+    """Value of the **top-level** `key:` (or 'key':) of opts inside the agent() parentheses (code[start:end]) -> (status, value), status in missing | expr | ok.
 
-    최상위 = 중괄호 깊이 1, 소괄호·대괄호 깊이 0. 중첩 객체, 중첩 호출의 같은 키는 무시 (= missing). 같은 키가 여럿이면 JS 처럼 마지막 것.
-    따옴표 키는 블랭크된 코드에서 `'     ':` 꼴 (키 길이만큼 공백) 로 보이므로 원문에서 이름을 확인한다.
+    Top level = brace depth 1, paren and bracket depth 0. The same key in nested objects or nested calls is ignored (= missing). If the key repeats, the last one wins, as in JS.
+    A quoted key looks like `'     ':` (spaces as long as the key) in the blanked code, so the name is confirmed in the original.
     """
     args = code[start:end]
-    bare = re.compile(r"(?<![\w.$])%s\s*:" % key)                 # $effort:, o.effort : 는 이 키가 아니다
+    bare = re.compile(r"(?<![\w.$])%s\s*:" % key)                 # $effort: and o.effort : are not this key
     quoted = re.compile(r"""(['"`])\s{%d}\1\s*:""" % len(key))
-    shorthand = re.compile(r"(?<![\w.$])%s\s*[,}]" % key)          # {effort} = 변수 effort 를 그 이름으로 넣는 꼴
+    shorthand = re.compile(r"(?<![\w.$])%s\s*[,}]" % key)          # {effort} = the variable effort passed under its own name
     ends = []
     for km in bare.finditer(args):
         if _depths_at(args, km.start()) == (1, 0, 0):
@@ -210,18 +214,18 @@ def _opt_literal(code, script, start, end, key):
 
 
 def _opts_shape(code, start, end):
-    """agent() 괄호 안의 opts 가 **평평한 객체 리터럴 하나** 가 아니면 그 이유, 맞으면 None.
+    """If the opts inside the agent() parentheses is not **one flat object literal**, return the reason, else None.
 
-    런타임 값이 hook 이 읽은 리터럴과 달라질 수 있는 꼴을 전부 거절한다 (fail-closed): 최상위 객체 리터럴이 둘 이상 (c ? {…} : {…}),
-    객체 앞뒤에 다른 식 (c ? X : {…}, {…}.x), spread (...), 계산 키 (['effort']), get/set 메소드, 식별자 이스케이프 (역슬래시).
-    `${` (프롬프트 템플릿 리터럴의 식) 는 객체가 아니다. 객체가 하나도 없으면 (opts 생략, 변수) 여기서는 두고 missing 이 알린다.
+    Every form where the runtime value could differ from the literal the hook read is rejected (fail-closed): more than one top-level object literal (c ? {…} : {…}),
+    another expression before or after the object (c ? X : {…}, {…}.x), spread (...), computed keys (['effort']), get/set methods, identifier escapes (backslash).
+    `${` (an expression in a prompt template literal) is not an object. If there is no object at all (opts omitted, a variable), it is left here and missing reports it.
     """
     args = code[start:end]
     opens = [i for i, ch in enumerate(args) if ch == "{" and not (i > 0 and args[i - 1] == "$") and _depths_at(args, i) == (0, 0, 0)]
     if not opens:
         return None
     if len(opens) > 1:
-        return "opts 자리에 객체 리터럴이 %d개 (삼항식으로 고르는 꼴) — 하나만" % len(opens)
+        return "%d object literals in the opts position (chosen by a ternary) - use only one" % len(opens)
     o = opens[0]
     depth = 0
     close = None
@@ -234,49 +238,49 @@ def _opts_shape(code, start, end):
                 close = i
                 break
     if close is None:
-        return "opts 객체가 닫히지 않았어"
+        return "the opts object is not closed"
     before = args[:o]
     commas = [i for i, ch in enumerate(before) if ch == "," and _depths_at(before, i) == (0, 0, 0)]
     if before[(commas[-1] + 1) if commas else 0:].strip():
-        return "opts 객체 앞에 다른 식이 있어 (c ? X : {…} 꼴)"
+        return "another expression before the opts object (c ? X : {…} form)"
     if args[close + 1:].strip().rstrip(",").strip():
-        return "opts 객체 뒤에 다른 식이 있어"
+        return "another expression after the opts object"
     body = args[o + 1:close]
     for i, ch in enumerate(body):
         if _depths_at(body, i) != (0, 0, 0):
             continue
         if ch == "\\":
-            return "키에 식별자 이스케이프 (역슬래시)"
+            return "identifier escape (backslash) in a key"
         if ch == "." and body[i:i + 3] == "...":
-            return "spread (...) 는 뒤 값이 앞 리터럴을 덮어"
+            return "spread (...) lets a later value override the earlier literal"
         if ch == "[":
             prev = body[:i].rstrip()
             if not prev or prev[-1] in "{,":
-                return "계산 키 (['effort']) 는 못 읽어"
+                return "a computed key (['effort']) cannot be read"
     if re.search(r"(?<![\w.$])(get|set)\s+[\w$]+\s*\(", body):
-        return "get/set 메소드는 못 읽어"
+        return "get/set methods cannot be read"
     return None
 
 
 def agent_calls(script):
-    """agent( 호출마다 {"line", "model", "status", "effort", "effort_status", "shape", "args"} — status ∈ missing | shorthand | expr | ok.
+    """For each agent( call, {"line", "model", "status", "effort", "effort_status", "shape", "args"} - status in missing | shorthand | expr | ok.
 
-    model, effort 는 opts (두 번째 인자 객체) 의 **최상위** 키 값만 본다 (_opt_literal). shape 는 _opts_shape 의 거부 이유 (없으면 None).
+    model and effort are read only from the **top-level** keys of opts (the second argument object) (_opt_literal). shape is the rejection reason from _opts_shape (None if none).
     """
     code, end_state = blank_strings_and_comments(script)
     if end_state != "code":
-        raise ValueError("닫히지 않은 문자열 또는 주석 — 정규식 리터럴 (/[/*]/ 류) 이면 new RegExp('…') 로 바꿔줘")
+        raise ValueError("unclosed string or comment - if it is a regex literal (/[/*]/ and similar), switch to new RegExp('…')")
     dyn = DYNAMIC_ACCESS.search(code)
     if dyn:
-        raise ValueError("eval, Function, globalThis, 계산 속성으로 agent 에 닿는 스크립트는 판정할 수 없어 (script, 줄 %d)"
+        raise ValueError("a script that reaches agent through eval, Function, globalThis, or a computed property cannot be judged (script, line %d)"
                          % (code.count("\n", 0, dyn.start()) + 1))
     alias = AGENT_ALIAS.search(code)
     if alias:
-        raise ValueError("agent 를 호출 말고 다른 자리 (별칭, 인자, 속성) 에 썼어 (script, 줄 %d) — 호출마다 agent(...) 로 직접 써줘"
+        raise ValueError("agent is used somewhere other than a call (alias, argument, property) (script, line %d) - write agent(...) directly for each call"
                          % (code.count("\n", 0, alias.start()) + 1))
     calls = []
     for m in AGENT_CALL.finditer(code):
-        start = m.end()           # '(' 바로 뒤
+        start = m.end()           # right after '('
         depth = 1
         j = start
         while j < len(code) and depth:
@@ -296,22 +300,22 @@ def agent_calls(script):
 
 
 def agent_calls_without_model(script):
-    """(전체 호출 수, model 없는 호출의 줄 번호 목록) — 구 인터페이스 유지."""
+    """(total call count, line numbers of calls without model) - kept for the old interface."""
     calls = agent_calls(script)
     return len(calls), [c["line"] for c in calls if c["status"] == "missing"]
 
 
-# ----------------------------------------------------------------------------- 판정
+# ----------------------------------------------------------------------------- decision
 
 def classify(model):
-    """모델 값 → (tier, error). full ID (claude-haiku-4-5) 도 계열로 정규화."""
+    """Model value -> (tier, error). Full IDs (claude-haiku-4-5) are normalized to their family too."""
     v = str(model).strip().lower()
     if not v or v == "inherit":
-        return None, "model '%s' 은 금지 — 상속하려면 현재 모델 이름을 그대로 적어줘" % v
+        return None, "model '%s' is not allowed - to inherit, write the current model name as is" % v
     for t in TIERS:
         if t in v:
             return t, None
-    return None, "model '%s' 은 허용 목록 (fable / opus / sonnet / haiku) 에 없어" % v
+    return None, "model '%s' is not in the allow list (fable / opus / sonnet / haiku)" % v
 
 
 def _lines(nums):
@@ -319,47 +323,47 @@ def _lines(nums):
 
 
 def effort_cap():
-    """effort 상한. env SUBAGENT_EFFORT_CAP (EFFORTS 안 값) 이 있으면 그 값, 아니면 기본 (xhigh)."""
+    """effort cap. env SUBAGENT_EFFORT_CAP (a value in EFFORTS) if set, otherwise the default (xhigh)."""
     v = os.environ.get("SUBAGENT_EFFORT_CAP", "").strip().lower()
     return v if v in EFFORTS else EFFORT_CAP_DEFAULT
 
 
 def effort_error(effort, text, where):
-    """effort 값 (Agent 의 tool_input.effort, agent() 의 effort: 리터럴) 의 거부 사유 또는 None. text = 표지를 찾을 범위 (prompt, 괄호 안)."""
+    """Rejection reason for an effort value (Agent tool_input.effort, agent() effort: literal) or None. text = where to look for the mark (prompt, inside the parentheses)."""
     if effort is None or str(effort).strip() == "":
-        return (where + " 에 effort 가 없어~ 세션 effort 가 그대로 상속되니 effort 를 적어서 다시 불러줘~ "
-                "(작업 agent high, 기계적 수집 low, judge·critic xhigh)")
+        return (where + " has no effort. The session effort would be inherited as is; call again with effort set "
+                "(work agent high, mechanical collection low, judge/critic xhigh)")
     v = str(effort).strip()
     if v not in EFFORTS:
         if v.lower() in EFFORTS:
-            return where + ": effort '%s' 은 소문자로 적어줘 ('%s') — 런타임이 대문자를 받는지 모르니 그대로 안 보내~" % (v, v.lower())
-        return where + ": effort '%s' 은 허용 목록 (%s) 에 없어~" % (v, "/".join(EFFORTS))
+            return where + ": write effort '%s' in lowercase ('%s') - the runtime may not accept uppercase, so it is not sent as is" % (v, v.lower())
+        return where + ": effort '%s' is not in the allow list (%s)" % (v, "/".join(EFFORTS))
     cap = effort_cap()
     if EFFORTS.index(v) > EFFORTS.index(cap) and (EFFORT_MARK % v) not in (text or ""):
-        return (where + ": effort '%s' 은 상한 '%s' 위야~ 사용자가 그 작업에 허용했으면 그 호출 안에 '%s' 표지, 아니면 '%s' 이하로. "
-                "(상한은 env SUBAGENT_EFFORT_CAP 로 조절)" % (v, cap, EFFORT_MARK % v, cap))
+        return (where + ": effort '%s' is above the cap '%s'. If the owner approved it for that task, put a '%s' mark inside that call; otherwise use '%s' or lower. "
+                "(set the cap with env SUBAGENT_EFFORT_CAP)" % (v, cap, EFFORT_MARK % v, cap))
     return None
 
 
 def decide(payload):
-    """거부 사유 문자열 또는 None."""
+    """Rejection reason string or None."""
     tool = payload.get("tool_name", "")
     tool_input = payload.get("tool_input") or {}
 
     if tool in ("Agent", "Task"):
         model = tool_input.get("model")
         if not model:
-            return tool + " 호출에 model 이 없어~ 부모 모델이 그대로 상속되니 model 넣어서 다시 불러줘~ " + GUIDE
+            return tool + " call has no model. The parent model would be inherited as is; call again with model set. " + GUIDE
         tier, err = classify(model)
         if err:
-            return tool + ": " + err + "~ " + GUIDE
+            return tool + ": " + err + ". " + GUIDE
         if tier == "haiku" and HAIKU_MARK not in (tool_input.get("prompt") or ""):
-            return (tool + " 에 haiku 를 쓰려면 사용자가 그 작업에 허용했어야 해~ 허용받았으면 prompt 에 "
-                    + HAIKU_MARK + " 표지, 아니면 sonnet 으로. " + GUIDE)
+            return (tool + " needs owner approval for that task to use haiku. If approved, put a "
+                    + HAIKU_MARK + " mark in prompt; otherwise use sonnet. " + GUIDE)
         if tier == "fable" and FABLE_MARK not in (tool_input.get("prompt") or ""):
-            return (tool + " 에 fable 을 쓰려면 사용자가 그 작업에 허용했어야 해~ 허용받았으면 prompt 에 "
-                    + FABLE_MARK + " 표지, 아니면 opus 로. " + GUIDE)
-        err = effort_error(tool_input.get("effort"), tool_input.get("prompt") or "", tool + " 호출")
+            return (tool + " needs owner approval for that task to use fable. If approved, put a "
+                    + FABLE_MARK + " mark in prompt; otherwise use opus. " + GUIDE)
+        err = effort_error(tool_input.get("effort"), tool_input.get("prompt") or "", tool + " call")
         if err:
             return err + " " + GUIDE
         return None
@@ -367,57 +371,57 @@ def decide(payload):
     if tool == "Workflow":
         script, source, err = read_script(tool_input)
         if err:
-            return "Workflow " + err + "~ 경로를 확인하고 다시 불러줘. " + GUIDE
+            return "Workflow " + err + ". Check the path and call again. " + GUIDE
         if not script:
-            return None  # 내장 workflow 등 — 검사 대상 아님
+            return None  # built-in workflows etc. - nothing to check
         try:
             calls = agent_calls(script)
         except ValueError as e:
-            return "Workflow 스크립트를 해석할 수 없어 (%s): %s~ " % (source, e) + GUIDE
+            return "Workflow script cannot be parsed (%s): %s. " % (source, e) + GUIDE
         shapes = [(c["line"], c["shape"]) for c in calls if c["shape"]]
         if shapes:
-            return ("Workflow agent() 의 opts 가 평평한 객체 리터럴 하나가 아니야 (줄 %s: %s) — 런타임 값이 hook 이 읽은 것과 달라질 수 있어서 막아. "
-                    "{model: 'opus', effort: 'high', …} 를 그 자리에 직접 적어줘~ " % (_lines([l for l, _ in shapes]), shapes[0][1]) + GUIDE)
+            return ("Workflow agent() opts is not one flat object literal (line %s: %s) - blocked because the runtime value could differ from what the hook read. "
+                    "Write {model: 'opus', effort: 'high', …} directly in that spot. " % (_lines([l for l, _ in shapes]), shapes[0][1]) + GUIDE)
         short = [c["line"] for c in calls if c["status"] == "shorthand" or c["effort_status"] == "shorthand"]
         if short:
-            return ("Workflow agent() 의 model 이나 effort 가 shorthand ({effort}) 야 (줄 %s) — 변수라서 못 읽어, 'high' 처럼 리터럴로 적어줘~ "
+            return ("Workflow agent() model or effort is shorthand ({effort}) (line %s) - it is a variable and cannot be read; write a literal like 'high'. "
                     % _lines(short) + GUIDE)
         missing = [c["line"] for c in calls if c["status"] == "missing"]
         if missing:
-            return ("Workflow agent() %d개 중 %d개에 model 이 없어~ (%s, 줄 %s). opts 최상위에 model 을 넣고 다시 돌려줘~ "
-                    "(meta.phases 의 model, 중첩 객체 안 model 은 안 세) " % (len(calls), len(missing), source, _lines(missing)) + GUIDE)
+            return ("Workflow agent(): of %d calls, %d have no model (%s, line %s). Put model at the top level of opts and run again "
+                    "(model in meta.phases or inside a nested object does not count). " % (len(calls), len(missing), source, _lines(missing)) + GUIDE)
         expr = [c["line"] for c in calls if c["status"] == "expr"]
         if expr:
-            return ("Workflow agent() 의 model 이 문자열 리터럴이 아니야 (줄 %s) — 변수, 삼항식, 괄호식 말고 "
-                    "'opus' / 'sonnet' 을 직접 적어줘~ " % _lines(expr) + GUIDE)
+            return ("Workflow agent() model is not a string literal (line %s) - write 'opus' / 'sonnet' directly, "
+                    "not a variable, ternary, or parenthesized expression. " % _lines(expr) + GUIDE)
         tiers = {}
         for c in calls:
             tier, err = classify(c["model"])
             if err:
-                return "Workflow agent() 줄 %d: %s~ " % (c["line"], err) + GUIDE
+                return "Workflow agent() line %d: %s. " % (c["line"], err) + GUIDE
             tiers.setdefault(tier, []).append(c)
         fable_unmarked = [c["line"] for c in tiers.get("fable", []) if FABLE_MARK not in c["args"]]
         if fable_unmarked:
-            return ("Workflow 의 fable agent() (줄 %s) 는 사용자가 그 작업에 허용했을 때만이야~ 허용받았으면 그 agent() 괄호 안 "
-                    "(label 이나 prompt) 에 %s 표지, 아니면 opus 로. " % (_lines(fable_unmarked), FABLE_MARK) + GUIDE)
+            return ("Workflow fable agent() (line %s) is allowed only when the owner approved it for that task. If approved, put a %s mark "
+                    "inside that agent() call's parentheses (label or prompt); otherwise use opus. " % (_lines(fable_unmarked), FABLE_MARK) + GUIDE)
         fable = [c["line"] for c in tiers.get("fable", [])]
         if len(fable) > FABLE_MAX:
-            return ("Workflow 에 fable agent() 가 %d곳 (줄 %s) — fable 은 judge/critic 자리 %d곳까지, 나머지는 opus 로~ "
+            return ("Workflow has fable agent() at %d sites (line %s) - fable is for judge/critic seats, up to %d sites; use opus for the rest. "
                     % (len(fable), _lines(fable), FABLE_MAX) + GUIDE)
         haiku = [c["line"] for c in tiers.get("haiku", []) if HAIKU_MARK not in c["args"]]
         if haiku:
-            return ("Workflow 의 haiku agent() (줄 %s) 는 사용자가 그 작업에 허용했을 때만이야~ 허용받았으면 그 agent() 괄호 안 "
-                    "(label 이나 prompt) 에 %s 표지, 아니면 sonnet 으로. " % (_lines(haiku), HAIKU_MARK) + GUIDE)
+            return ("Workflow haiku agent() (line %s) is allowed only when the owner approved it for that task. If approved, put a %s mark "
+                    "inside that agent() call's parentheses (label or prompt); otherwise use sonnet. " % (_lines(haiku), HAIKU_MARK) + GUIDE)
         emissing = [c["line"] for c in calls if c["effort_status"] == "missing"]
         if emissing:
-            return ("Workflow agent() %d개 중 %d개에 effort 가 없어~ (%s, 줄 %s). 세션 effort 가 상속되니 opts 최상위에 effort 를 넣어줘 "
-                    "(작업 high, 기계적 수집 low, judge·critic xhigh)~ " % (len(calls), len(emissing), source, _lines(emissing)) + GUIDE)
+            return ("Workflow agent(): of %d calls, %d have no effort (%s, line %s). The session effort is inherited; put effort at the top level of opts "
+                    "(work high, mechanical collection low, judge/critic xhigh). " % (len(calls), len(emissing), source, _lines(emissing)) + GUIDE)
         eexpr = [c["line"] for c in calls if c["effort_status"] == "expr"]
         if eexpr:
-            return ("Workflow agent() 의 effort 가 문자열 리터럴이 아니야 (줄 %s) — 변수, 삼항식 말고 'high' 처럼 직접 적어줘~ "
+            return ("Workflow agent() effort is not a string literal (line %s) - write it directly like 'high', not a variable or ternary. "
                     % _lines(eexpr) + GUIDE)
         for c in calls:
-            err = effort_error(c["effort"], c["args"], "Workflow agent() 줄 %d" % c["line"])
+            err = effort_error(c["effort"], c["args"], "Workflow agent() line %d" % c["line"])
             if err:
                 return err + " " + GUIDE
         return None
@@ -434,202 +438,202 @@ def _self_test():
         return {"tool_name": "Workflow", "tool_input": {"script": script}}
 
     cases = [
-        # --- 2026-09-24 회귀 16
-        ("Agent model 없음 → deny",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "effort": "high"}}, True, "model 이 없어"),
-        ("Agent model 있음 (opus) → pass",
+        # --- 2026-09-24 regressions (16)
+        ("Agent without model → deny",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "effort": "high"}}, True, "no model"),
+        ("Agent with model (opus) → pass",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "high"}}, False, None),
-        ("Task (구버전 이름) model 없음 → deny",
-         {"tool_name": "Task", "tool_input": {"prompt": "x", "effort": "high"}}, True, "Task 호출에 model 이 없어"),
-        ("Task model 있음 → pass",
+        ("Task (old name) without model → deny",
+         {"tool_name": "Task", "tool_input": {"prompt": "x", "effort": "high"}}, True, "Task call has no model"),
+        ("Task with model → pass",
          {"tool_name": "Task", "tool_input": {"prompt": "x", "model": "sonnet", "effort": "low"}}, False, None),
-        ("Workflow 두 호출 전부 model → pass",
+        ("Workflow with model on both calls → pass",
          wf("const a = await agent('p', {model: 'opus', effort: 'high'})\nconst b = await agent('q', { label: 'x', model: 'sonnet', effort: 'low' })"),
          False, None),
-        ("Workflow agent 별칭 대입 → deny",
+        ("Workflow agent alias assignment → deny",
          wf("const run = agent\nconst r = await run('p', {model: 'opus', effort: 'high'})"),
-         True, "별칭"),
-        ("Workflow agent 를 인자로 전달 → deny",
+         True, "alias"),
+        ("Workflow agent passed as an argument → deny",
          wf("const r = await helper(agent, ITEMS)"),
-         True, "별칭"),
-        ("Workflow x.agent( 도 model 검사 → deny",
+         True, "alias"),
+        ("Workflow x.agent( also gets the model check → deny",
          wf("const r = await ctx.agent('p', { effort: 'high' })"),
-         True, "model 이 없어"),
-        ("Workflow globalThis 접근 → deny",
+         True, "no model"),
+        ("Workflow globalThis access → deny",
          wf("const a = globalThis['ag' + 'ent']\nreturn 1"),
-         True, "판정할 수 없어"),
+         True, "cannot be judged"),
         ("Workflow eval → deny",
          wf("eval('agent')\nreturn 1"),
-         True, "판정할 수 없어"),
-        ("Workflow agentType 키는 별칭 아님 → pass",
+         True, "cannot be judged"),
+        ("Workflow agentType key is not an alias → pass",
          wf("const r = await agent('p', { agentType: 'review-readonly', model: 'opus', effort: 'high' })"),
          False, None),
-        ("Workflow 둘 중 하나 누락 → deny (줄 2)",
+        ("Workflow one of two missing → deny (line 2)",
          wf("const a = await agent('p', {model: 'opus', effort: 'high'})\nconst b = await agent('q', { label: 'x', effort: 'high' })"),
-         True, "model 이 없어~ (script, 줄 2)"),
-        ("meta.phases 의 model 만 있고 agent 는 없음 → deny (구 방식 미탐 회귀)",
+         True, "have no model (script, line 2)"),
+        ("model only in meta.phases, not on agent → deny (old method miss regression)",
          wf("export const meta = { name: 'x', phases: [{ title: 'a', model: 'opus' }] }\nconst r = await agent('do', { label: 'one', effort: 'high' })\nreturn r"),
-         True, "model 이 없어~ (script, 줄 2)"),
-        ("프롬프트 문자열 속 'agent() 호출' 글자는 세지 않음 → pass (구 방식 오탐 회귀)",
-         wf("const P = `이 스크립트의 agent() 호출 2개 중 model 지정...`\nconst r = await agent(P, {model: 'opus', effort: 'high'})"),
+         True, "have no model (script, line 2)"),
+        ("text 'agent() call' inside a prompt string is not counted → pass (old method false positive regression)",
+         wf("const P = `of the 2 agent() calls in this script, model set...`\nconst r = await agent(P, {model: 'opus', effort: 'high'})"),
          False, None),
-        ("주석 속 agent( 만 → pass (호출 0)",
+        ("agent( only inside comments → pass (0 calls)",
          wf("// agent('x')\n/* agent('y') */\nreturn 1"), False, None),
-        ("템플릿 ${} 안 호출도 검사 → deny",
-         wf("const s = `v=${await agent('p', {label: 'l', effort: 'high'})}`"), True, "model 이 없어~ (script, 줄 1)"),
-        ("템플릿 ${} 안 호출 model 있음 → pass",
+        ("call inside template ${} is checked too → deny",
+         wf("const s = `v=${await agent('p', {label: 'l', effort: 'high'})}`"), True, "have no model (script, line 1)"),
+        ("call inside template ${} with model → pass",
          wf("const s = `v=${await agent('p', {label: 'l', model: 'opus', effort: 'medium'})}`"), False, None),
-        ("여러 줄 opts → pass",
+        ("multi-line opts → pass",
          wf("const r = await agent(\n  'p',\n  {\n    label: 'x',\n    schema: S,\n    model: 'opus',\n    effort: 'high',\n  },\n)"), False, None),
-        ("pipeline 콜백 안 호출 누락 → deny (줄 3)",
+        ("call missing inside a pipeline callback → deny (line 3)",
          wf("const r = await pipeline(\n  ITEMS,\n  it => agent(it.p, { label: it.k, schema: S, effort: 'high' }),\n  (a, it) => agent('v', { model: 'opus', effort: 'high' }),\n)"),
-         True, "model 이 없어~ (script, 줄 3)"),
-        ("agentType: 키는 호출로 안 봄 → pass",
+         True, "have no model (script, line 3)"),
+        ("agentType: key is not seen as a call → pass",
          wf("const r = await agent('p', { agentType: 'general-purpose', model: 'sonnet', effort: 'low' })"), False, None),
-        ("저장된 workflow 이름 (내장, 소스 없음) → pass",
+        ("saved workflow name (built in, no source) → pass",
          {"tool_name": "Workflow", "tool_input": {"name": "review-changes-builtin-nonexistent-zz"}}, False, None),
-        ("따옴표 키 {'model': 'opus'} → pass",
+        ("quoted key {'model': 'opus'} → pass",
          wf("const r = await agent('p', { 'model': 'opus', label: 'x', 'effort': 'high' })"), False, None),
-        # --- 2026-10-11 fable 상한, haiku 표지
-        ("Workflow fable 표지 2곳 → pass (상한 안)",
+        # --- 2026-10-11 fable cap, haiku mark
+        ("Workflow fable marks at 2 sites → pass (within cap)",
          wf("const a = await agent('p', {label: '[owner-approved: fable] judge', model: 'fable', effort: 'xhigh'})\nconst b = await agent('q', {label: '[owner-approved: fable] critic', model: 'fable', effort: 'xhigh'})\nconst c = await agent('r', {model: 'opus', effort: 'high'})"),
          False, None),
-        ("Workflow fable 표지 3곳 → deny (줄 1, 2, 3)",
+        ("Workflow fable marks at 3 sites → deny (line 1, 2, 3)",
          wf("const a = await agent('p', {label: '[owner-approved: fable]', model: 'fable', effort: 'high'})\nconst b = await agent('q', {label: '[owner-approved: fable]', model: \"fable\", effort: 'high'})\nconst c = await agent('r', { label: '[owner-approved: fable] x', model: 'fable', effort: 'high' })"),
-         True, "fable agent() 가 3곳 (줄 1, 2, 3)"),
-        # --- 2026-10-13 fable 표지
-        ("Agent fable 표지 없음 → deny",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "fable", "effort": "high"}}, True, "fable 을 쓰려면"),
-        ("Agent fable 표지 있음 → pass",
-         {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: fable] 미묘한 설계 판정", "model": "fable", "effort": "xhigh"}}, False, None),
-        ("Workflow fable 표지 없음 → deny (10/13 카드 검증 사고 재현)",
-         wf("const r = await parallel(G.map(g => () => agent(g.p, { label: 'verify:' + g.key, model: 'fable', effort: 'high' })))"), True, "fable agent() (줄 1) 는 사용자가"),
-        ("Workflow fable 표지가 호출 밖 주석에만 → deny",
-         wf("// [owner-approved: fable]\nconst a = await agent('p', {model: 'fable', effort: 'high'})"), True, "fable agent() (줄 2) 는 사용자가"),
-        ("Workflow fable 표지 1곳 + opus → pass",
+         True, "fable agent() at 3 sites (line 1, 2, 3)"),
+        # --- 2026-10-13 fable mark
+        ("Agent fable without mark → deny",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "fable", "effort": "high"}}, True, "to use fable"),
+        ("Agent fable with mark → pass",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: fable] subtle design judgment", "model": "fable", "effort": "xhigh"}}, False, None),
+        ("Workflow fable without mark → deny (regression: an unmarked fable call in a parallel lane)",
+         wf("const r = await parallel(G.map(g => () => agent(g.p, { label: 'verify:' + g.key, model: 'fable', effort: 'high' })))"), True, "fable agent() (line 1) is allowed only"),
+        ("Workflow fable mark only in a comment outside the call → deny",
+         wf("// [owner-approved: fable]\nconst a = await agent('p', {model: 'fable', effort: 'high'})"), True, "fable agent() (line 2) is allowed only"),
+        ("Workflow fable mark at 1 site + opus → pass",
          wf("const a = await agent('p', {label: '[owner-approved: fable] judge', model: 'fable', effort: 'xhigh'})\nconst b = await agent('q', {model: 'opus', effort: 'high'})"), False, None),
-        ("Workflow haiku 표지 없음 → deny",
-         wf("const a = await agent('p', {model: 'haiku', effort: 'low'})"), True, "haiku agent() (줄 1) 는 사용자가"),
-        ("Workflow haiku 표지가 그 호출 안 (label) → pass",
-         wf("const a = await agent('p', {label: '[owner-approved: haiku] 파싱', model: 'haiku', effort: 'low'})"), False, None),
-        ("Workflow haiku 표지가 호출 밖 주석에만 → deny (범위 좁힘)",
-         wf("// [owner-approved: haiku]\nconst a = await agent('p', {model: 'haiku', effort: 'low'})"), True, "haiku agent() (줄 2) 는 사용자가"),
-        ("Workflow full ID claude-haiku-4-5 표지 없음 → deny",
-         wf("const a = await agent('p', {model: 'claude-haiku-4-5', effort: 'low'})"), True, "haiku agent() (줄 1) 는 사용자가"),
+        ("Workflow haiku without mark → deny",
+         wf("const a = await agent('p', {model: 'haiku', effort: 'low'})"), True, "haiku agent() (line 1) is allowed only"),
+        ("Workflow haiku mark inside that call (label) → pass",
+         wf("const a = await agent('p', {label: '[owner-approved: haiku] parsing', model: 'haiku', effort: 'low'})"), False, None),
+        ("Workflow haiku mark only in a comment outside the call → deny (narrowed scope)",
+         wf("// [owner-approved: haiku]\nconst a = await agent('p', {model: 'haiku', effort: 'low'})"), True, "haiku agent() (line 2) is allowed only"),
+        ("Workflow full ID claude-haiku-4-5 without mark → deny",
+         wf("const a = await agent('p', {model: 'claude-haiku-4-5', effort: 'low'})"), True, "haiku agent() (line 1) is allowed only"),
         ("Workflow full ID claude-opus-5-5 → pass",
          wf("const a = await agent('p', {model: 'claude-opus-5-5', effort: 'high'})"), False, None),
-        # --- 2026-10-11 Codex 지적: 값 읽기 위치, 중첩, 비리터럴, inherit, 파싱 실패
-        ("프롬프트 문자열 속 model: 'opus' 글자에 안 속음 → deny (실제는 haiku)",
-         wf("const a = await agent(\"model: 'opus' 로 해줘\", {model: 'haiku', effort: 'low'})"), True, "haiku agent() (줄 1) 는 사용자가"),
-        ("중첩 객체 metadata.model 만 → deny (missing)",
-         wf("const a = await agent('p', {metadata: {model: 'opus'}, label: 'x', effort: 'high'})"), True, "model 이 없어~ (script, 줄 1)"),
-        ("중첩 agent() 의 model 이 바깥 누락을 못 가림 → deny (줄 1)",
-         wf("const a = await agent(await agent('inner', {model: 'opus', effort: 'high'}), {label: 'outer', effort: 'high'})"), True, "model 이 없어~ (script, 줄 1)"),
-        ("model 이 변수 → deny (리터럴 아님)",
-         wf("const M = pick()\nconst a = await agent('p', {model: M, effort: 'high'})"), True, "model 이 문자열 리터럴이 아니야"),
-        ("model 이 삼항식 'opus' ? 'haiku' : 'sonnet' → deny",
-         wf("const a = await agent('p', {model: 'opus' ? 'haiku' : 'sonnet', effort: 'high'})"), True, "model 이 문자열 리터럴이 아니야"),
-        ("model 이 괄호식 ('haiku') → deny",
-         wf("const a = await agent('p', {model: ('haiku'), effort: 'high'})"), True, "model 이 문자열 리터럴이 아니야"),
+        # --- 2026-10-11 external review findings: where values are read, nesting, non-literals, inherit, parse failure
+        ("text model: 'opus' inside a prompt string does not fool it → deny (actually haiku)",
+         wf("const a = await agent(\"use model: 'opus'\", {model: 'haiku', effort: 'low'})"), True, "haiku agent() (line 1) is allowed only"),
+        ("only nested object metadata.model → deny (missing)",
+         wf("const a = await agent('p', {metadata: {model: 'opus'}, label: 'x', effort: 'high'})"), True, "have no model (script, line 1)"),
+        ("model of a nested agent() does not hide the outer one missing → deny (line 1)",
+         wf("const a = await agent(await agent('inner', {model: 'opus', effort: 'high'}), {label: 'outer', effort: 'high'})"), True, "have no model (script, line 1)"),
+        ("model is a variable → deny (not a literal)",
+         wf("const M = pick()\nconst a = await agent('p', {model: M, effort: 'high'})"), True, "model is not a string literal"),
+        ("model is a ternary 'opus' ? 'haiku' : 'sonnet' → deny",
+         wf("const a = await agent('p', {model: 'opus' ? 'haiku' : 'sonnet', effort: 'high'})"), True, "model is not a string literal"),
+        ("model is a parenthesized expression ('haiku') → deny",
+         wf("const a = await agent('p', {model: ('haiku'), effort: 'high'})"), True, "model is not a string literal"),
         ("Workflow model: 'inherit' → deny",
-         wf("const a = await agent('p', {model: 'inherit', effort: 'high'})"), True, "은 금지 — 상속하려면"),
+         wf("const a = await agent('p', {model: 'inherit', effort: 'high'})"), True, "is not allowed - to inherit"),
         ("Agent model inherit → deny",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "inherit", "effort": "high"}}, True, "은 금지 — 상속하려면"),
-        ("Agent 허용 외 모델 이름 → deny",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "gpt-6", "effort": "high"}}, True, "허용 목록 (fable / opus / sonnet / haiku) 에 없어"),
-        ("Agent haiku 표지 없음 → deny",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "haiku", "effort": "low"}}, True, "haiku 를 쓰려면"),
-        ("Agent haiku 표지 있음 → pass",
-         {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: haiku] 로그 파싱", "model": "haiku", "effort": "low"}}, False, None),
-        ("정규식 리터럴 /[/*]/ 가 주석을 열어 파싱 깨짐 → deny (fail-closed)",
-         wf("const r = /[/*]/\nconst a = await agent('p', {model: 'haiku', effort: 'low'})"), True, "해석할 수 없어"),
-        # --- 2026-10-13 저녁 effort
-        ("Agent effort 없음 → deny (세션 effort 상속)",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus"}}, True, "effort 가 없어"),
-        ("Agent effort 허용 외 값 → deny",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "ultra"}}, True, "허용 목록"),
-        ("Agent effort max 표지 없음 → deny (상한 xhigh)",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "max"}}, True, "상한"),
-        ("Agent effort max 표지 있음 → pass",
-         {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: max] 최종 판정", "model": "opus", "effort": "max"}}, False, None),
-        ("Agent effort xhigh (기본 상한 안) → pass",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "inherit", "effort": "high"}}, True, "is not allowed - to inherit"),
+        ("Agent model name outside the allow list → deny",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "gpt-6", "effort": "high"}}, True, "not in the allow list (fable / opus / sonnet / haiku)"),
+        ("Agent haiku without mark → deny",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "haiku", "effort": "low"}}, True, "to use haiku"),
+        ("Agent haiku with mark → pass",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: haiku] log parsing", "model": "haiku", "effort": "low"}}, False, None),
+        ("regex literal /[/*]/ opens a comment and breaks parsing → deny (fail-closed)",
+         wf("const r = /[/*]/\nconst a = await agent('p', {model: 'haiku', effort: 'low'})"), True, "unclosed string or comment"),
+        # --- 2026-10-13 evening effort
+        ("Agent without effort → deny (inherits the session effort)",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus"}}, True, "no effort"),
+        ("Agent effort value outside the allow list → deny",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "ultra"}}, True, "effort 'ultra' is not in the allow list"),
+        ("Agent effort max without mark → deny (cap xhigh)",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "max"}}, True, "above the cap"),
+        ("Agent effort max with mark → pass",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: max] final judgment", "model": "opus", "effort": "max"}}, False, None),
+        ("Agent effort xhigh (within the default cap) → pass",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "xhigh"}}, False, None),
-        ("Workflow effort 둘 중 하나 누락 → deny (줄 2)",
-         wf("const a = await agent('p', {model: 'opus', effort: 'high'})\nconst b = await agent('q', {model: 'opus'})"), True, "effort 가 없어~ (script, 줄 2)"),
-        ("Workflow effort 변수 → deny (리터럴 아님)",
-         wf("const E = 'high'\nconst a = await agent('p', {model: 'opus', effort: E})"), True, "effort 가 문자열 리터럴이 아니야"),
-        ("Workflow effort 삼항식 → deny",
-         wf("const a = await agent('p', {model: 'opus', effort: big ? 'xhigh' : 'low'})"), True, "effort 가 문자열 리터럴이 아니야"),
-        ("Workflow effort max 표지가 그 호출 안 → pass",
+        ("Workflow effort missing on one of two → deny (line 2)",
+         wf("const a = await agent('p', {model: 'opus', effort: 'high'})\nconst b = await agent('q', {model: 'opus'})"), True, "have no effort (script, line 2)"),
+        ("Workflow effort variable → deny (not a literal)",
+         wf("const E = 'high'\nconst a = await agent('p', {model: 'opus', effort: E})"), True, "effort is not a string literal"),
+        ("Workflow effort ternary → deny",
+         wf("const a = await agent('p', {model: 'opus', effort: big ? 'xhigh' : 'low'})"), True, "effort is not a string literal"),
+        ("Workflow effort max mark inside that call → pass",
          wf("const a = await agent('p', {label: '[owner-approved: max] judge', model: 'opus', effort: 'max'})"), False, None),
-        ("Workflow effort max 표지가 호출 밖 주석에만 → deny",
-         wf("// [owner-approved: max]\nconst a = await agent('p', {model: 'opus', effort: 'max'})"), True, "상한"),
-        ("Workflow 중첩 객체 안 effort 만 → deny (missing)",
-         wf("const a = await agent('p', {model: 'opus', metadata: {effort: 'high'}})"), True, "effort 가 없어"),
-        ("프롬프트 문자열 속 effort: 'low' 글자에 안 속음 → deny (실제는 생략)",
-         wf("const a = await agent(\"effort: 'low' 로 해줘\", {model: 'opus'})"), True, "effort 가 없어"),
-        # --- 2026-10-13 저녁 반증 리뷰: opts 모양, 키 경계, 값 앞 주석, shorthand, 소문자
-        ("opts 삼항식 (객체 둘) → shape deny (앞 분기 max 가 표지 없이 지나가던 우회)",
-         wf("const a = await agent('p', big ? {model: 'opus', effort: 'max'} : {model: 'opus', effort: 'high'})"), True, "객체 리터럴이 2개"),
-        ("opts 삼항식 (변수 : 객체) → shape deny",
-         wf("const a = await agent('p', big ? OPTS : {model: 'opus', effort: 'high'})"), True, "객체 앞에 다른 식"),
+        ("Workflow effort max mark only in a comment outside the call → deny",
+         wf("// [owner-approved: max]\nconst a = await agent('p', {model: 'opus', effort: 'max'})"), True, "above the cap"),
+        ("Workflow effort only inside a nested object → deny (missing)",
+         wf("const a = await agent('p', {model: 'opus', metadata: {effort: 'high'}})"), True, "no effort"),
+        ("text effort: 'low' inside a prompt string does not fool it → deny (actually omitted)",
+         wf("const a = await agent(\"use effort: 'low'\", {model: 'opus'})"), True, "no effort"),
+        # --- 2026-10-13 evening refutation review: opts shape, key boundaries, comment before value, shorthand, lowercase
+        ("opts ternary (two objects) → shape deny (bypass where the first branch max passed without a mark)",
+         wf("const a = await agent('p', big ? {model: 'opus', effort: 'max'} : {model: 'opus', effort: 'high'})"), True, "2 object literals"),
+        ("opts ternary (variable : object) → shape deny",
+         wf("const a = await agent('p', big ? OPTS : {model: 'opus', effort: 'high'})"), True, "expression before the opts object"),
         ("opts spread → shape deny",
          wf("const a = await agent('p', {model: 'opus', effort: 'high', ...(c ? {effort: 'max'} : {})})"), True, "spread"),
-        ("opts 계산 키 ['effort'] → shape deny",
-         wf("const a = await agent('p', {model: 'opus', effort: 'high', ['effort']: 'max'})"), True, "계산 키"),
+        ("opts computed key ['effort'] → shape deny",
+         wf("const a = await agent('p', {model: 'opus', effort: 'high', ['effort']: 'max'})"), True, "computed key"),
         ("opts getter → shape deny",
          wf("const a = await agent('p', {model: 'opus', effort: 'high', get effort() { return 'max' }})"), True, "get/set"),
-        ("opts 뒤에 .x → shape deny",
-         wf("const a = await agent('p', {model: 'opus', effort: 'high'}.x)"), True, "객체 뒤에 다른 식"),
-        ("$effort: 는 키가 아니다 → effort 없음 deny",
-         wf("const a = await agent('p', {model: 'opus', $effort: 'high'})"), True, "effort 가 없어"),
-        ("label 값 안의 o.effort : 는 키가 아니다 → pass",
+        ("opts followed by .x → shape deny",
+         wf("const a = await agent('p', {model: 'opus', effort: 'high'}.x)"), True, "expression after the opts object"),
+        ("$effort: is not the key → no effort deny",
+         wf("const a = await agent('p', {model: 'opus', $effort: 'high'})"), True, "no effort"),
+        ("o.effort : inside a label value is not the key → pass",
          wf("const a = await agent('p', {model: 'opus', effort: 'high', label: big ? cfg.effort : 'judge'})"), False, None),
-        ("shorthand {effort} → 변수라고 알려 주며 deny",
+        ("shorthand {effort} → deny, reported as a variable",
          wf("const effort = 'high'\nconst a = await agent('p', {model: 'opus', effort})"), True, "shorthand"),
-        ("값 앞 주석 effort: /*j*/ 'high' → pass",
+        ("comment before the value effort: /*j*/ 'high' → pass",
          wf("const a = await agent('p', {model: 'opus', effort: /*judge*/ 'high'})"), False, None),
-        ("effort 'High' (대문자) → 소문자로 deny",
-         wf("const a = await agent('p', {model: 'opus', effort: 'High'})"), True, "소문자로"),
-        ("프롬프트 템플릿의 ${} 와 배열 값, 끝 쉼표는 모양 위반이 아니다 → pass",
+        ("effort 'High' (uppercase) → deny, asks for lowercase",
+         wf("const a = await agent('p', {model: 'opus', effort: 'High'})"), True, "in lowercase"),
+        ("${} in the prompt template, array values, and trailing commas are not shape violations → pass",
          wf("const a = await agent(`k=${key} v=${f(x)}`, {model: 'opus', effort: 'high', files: [a, b], schema: {type: 'object'},},)"), False, None),
-        ("Agent effort 'XHIGH' (대문자) → 소문자로 deny",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "XHIGH"}}, True, "소문자로"),
+        ("Agent effort 'XHIGH' (uppercase) → deny, asks for lowercase",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "XHIGH"}}, True, "in lowercase"),
     ]
-    # env 로 상한을 내리면 그 위 단계는 표지 없이 deny (settings.json env 에 두면 모든 세션에)
+    # lowering the cap through env makes levels above it deny without a mark (put it in settings.json env to cover every session)
     cap_cases = [
-        ("SUBAGENT_EFFORT_CAP=high: Agent xhigh 표지 없음 → deny",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "xhigh"}}, True, "상한 'high'"),
-        ("SUBAGENT_EFFORT_CAP=high: Agent xhigh 표지 있음 → pass",
+        ("SUBAGENT_EFFORT_CAP=high: Agent xhigh without mark → deny",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "xhigh"}}, True, "the cap 'high'"),
+        ("SUBAGENT_EFFORT_CAP=high: Agent xhigh with mark → pass",
          {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: xhigh] judge", "model": "opus", "effort": "xhigh"}}, False, None),
         ("SUBAGENT_EFFORT_CAP=high: Workflow high → pass",
          wf("const a = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
-        ("SUBAGENT_EFFORT_CAP=bogus: 기본 상한 (xhigh) 으로 → max deny",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "max"}}, True, "상한 'xhigh'"),
-        ("SUBAGENT_EFFORT_CAP=high: Workflow xhigh 표지 없음 → deny",
-         wf("const a = await agent('p', {model: 'opus', effort: 'xhigh'})"), True, "상한 'high'"),
-        ("SUBAGENT_EFFORT_CAP=high: Workflow xhigh 표지가 그 호출 안 → pass",
+        ("SUBAGENT_EFFORT_CAP=bogus: falls back to the default cap (xhigh) → max deny",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "max"}}, True, "the cap 'xhigh'"),
+        ("SUBAGENT_EFFORT_CAP=high: Workflow xhigh without mark → deny",
+         wf("const a = await agent('p', {model: 'opus', effort: 'xhigh'})"), True, "the cap 'high'"),
+        ("SUBAGENT_EFFORT_CAP=high: Workflow xhigh mark inside that call → pass",
          wf("const a = await agent('p', {label: '[owner-approved: xhigh] judge', model: 'opus', effort: 'xhigh'})"), False, None),
-        ("SUBAGENT_EFFORT_CAP=max: Agent max 표지 없음 → pass (상한이 max)",
+        ("SUBAGENT_EFFORT_CAP=max: Agent max without mark → pass (cap is max)",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "max"}}, False, None),
     ]
     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as fh:
         fh.write("const a = await agent('p', { label: 'x', effort: 'high' })\n")
         tmp = fh.name
-    cases.append(("scriptPath 누락 → deny (scriptPath)",
+    cases.append(("scriptPath missing model → deny (scriptPath)",
                   {"tool_name": "Workflow", "tool_input": {"scriptPath": tmp}}, True, "scriptPath"))
-    cases.append(("scriptPath 읽기 불가 → deny (fail-closed)",
-                  {"tool_name": "Workflow", "tool_input": {"scriptPath": tmp + ".nope"}}, True, "읽을 수 없어"))
-    for token in ("fable", "opus", "sonnet", "haiku", "effort", "생략", "/usage"):
+    cases.append(("scriptPath unreadable → deny (fail-closed)",
+                  {"tool_name": "Workflow", "tool_input": {"scriptPath": tmp + ".nope"}}, True, "cannot read"))
+    for token in ("fable", "opus", "sonnet", "haiku", "effort", "omit", "/usage"):
         if token not in GUIDE:
-            print("FAIL - GUIDE 문구에 %r 가 없다" % token)
+            print("FAIL - GUIDE text is missing %r" % token)
             sys.exit(1)
-    print("PASS - GUIDE 문구 토큰 7종 확인 (fable/opus/sonnet/haiku/effort/생략//usage), 길이 %d자" % len(GUIDE))
+    print("PASS - GUIDE text has all 7 tokens (fable/opus/sonnet/haiku/effort/omit//usage), length %d chars" % len(GUIDE))
     failed = 0
 
     def run(name, payload, expect_deny, must_contain):
-        if must_contain and must_contain in GUIDE:   # GUIDE 는 모든 deny 사유 끝에 붙으니, 거기 든 문구로는 어느 게이트가 막았는지 못 가른다
-            print("FAIL -", name, "| must_contain %r 가 GUIDE 에 들어 있어 (사유 전용 문구로)" % must_contain)
+        if must_contain and must_contain in GUIDE:   # GUIDE is appended to every deny reason, so text found there cannot tell which gate blocked
+            print("FAIL -", name, "| must_contain %r is inside GUIDE (use reason-only text)" % must_contain)
             return 1
         reason = decide(payload)
         ok = (reason is not None) == expect_deny
@@ -638,11 +642,11 @@ def _self_test():
         print(("PASS" if ok else "FAIL"), "-", name, ("" if ok else " | reason=%r" % reason))
         return 0 if ok else 1
 
-    saved_cap = os.environ.pop("SUBAGENT_EFFORT_CAP", None)   # 기본 상한으로 본다 (호출 환경의 값은 끝에 복원)
+    saved_cap = os.environ.pop("SUBAGENT_EFFORT_CAP", None)   # run with the default cap (the caller's value is restored at the end)
     for name, payload, expect_deny, must_contain in cases:
         failed += run(name, payload, expect_deny, must_contain)
     for name, payload, expect_deny, must_contain in cap_cases:
-        os.environ["SUBAGENT_EFFORT_CAP"] = name.split(":")[0].split("=")[1]   # 케이스 이름 머리 (SUBAGENT_EFFORT_CAP=<값>) 이 env 값
+        os.environ["SUBAGENT_EFFORT_CAP"] = name.split(":")[0].split("=")[1]   # the case name head (SUBAGENT_EFFORT_CAP=<value>) is the env value
         failed += run(name, payload, expect_deny, must_contain)
     os.environ.pop("SUBAGENT_EFFORT_CAP", None)
     if saved_cap is not None:
@@ -662,7 +666,7 @@ if __name__ == "__main__":
     try:
         payload = json.load(sys.stdin)
         reason = decide(payload)
-    except Exception as e:  # fail-closed — hook 이 죽으면 허용으로 흘러가지 않게
-        deny("subagent-model-guard 내부 오류로 차단 (fail-closed): %s: %s — ~/.claude/hooks/subagent-model-guard.py 확인" % (e.__class__.__name__, e))
+    except Exception as e:  # fail-closed - if the hook dies, it must not fall through to allow
+        deny("subagent-model-guard blocked by an internal error (fail-closed): %s: %s - check ~/.claude/hooks/subagent-model-guard.py" % (e.__class__.__name__, e))
     if reason:
         deny(reason)
