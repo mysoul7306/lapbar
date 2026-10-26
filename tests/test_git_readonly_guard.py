@@ -22,10 +22,14 @@ AGENT_PATH = ASSETS / "agents" / "scout-git.md"
 
 def _load_hook():
     """Load the hook by path without leaving bytecode inside the packaged assets."""
-    spec = importlib.util.spec_from_file_location("git_readonly_guard", HOOK_PATH)
+    name = "git_readonly_guard"
+    spec = importlib.util.spec_from_file_location(name, HOOK_PATH)
     module = importlib.util.module_from_spec(spec)
     previous = sys.dont_write_bytecode
     sys.dont_write_bytecode = True
+    # Python 3.11 dataclasses look the owning module up in sys.modules while the
+    # class body runs, so the module must be registered before it executes.
+    sys.modules[name] = module
     try:
         spec.loader.exec_module(module)
     finally:
