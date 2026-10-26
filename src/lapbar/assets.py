@@ -1,7 +1,7 @@
 """Packaged asset manifest: loading, filtering and reading asset files.
 
 The manifest (`assets/manifest.json`) is the single source of truth for what
-`beacon install` copies and what `beacon doctor` checks. Every function takes an
+`lapbar install` copies and what `lapbar doctor` checks. Every function takes an
 optional `root` so tests can point at a fake asset directory.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ AssetRoot = Traversable | Path
 
 @dataclass(frozen=True)
 class Asset:
-    """One file shipped by beacon. `dst` is relative to the install target."""
+    """One file shipped by lapbar. `dst` is relative to the install target."""
 
     category: str
     src: str
@@ -36,8 +36,8 @@ class Asset:
 
 
 def default_root() -> Traversable:
-    """Asset directory inside the installed `beacon` package."""
-    return resources.files("beacon").joinpath("assets")
+    """Asset directory inside the installed `lapbar` package."""
+    return resources.files("lapbar").joinpath("assets")
 
 
 def _resolve(root: AssetRoot | None) -> AssetRoot:

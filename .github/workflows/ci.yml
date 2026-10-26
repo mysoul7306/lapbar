@@ -14,8 +14,8 @@ jobs:
       - name: unit tests (stdlib only)
         run: PYTHONPATH=src python3 -m unittest discover -s tests
       - name: asset scan gate (no personal or company traces)
-        run: PYTHONPATH=src python3 -m beacon.cli bundle --check
+        run: PYTHONPATH=src python3 -m lapbar.cli bundle --check
       - name: hook self-tests
         run: |
-          python3 src/beacon/assets/hooks/subagent-model-guard.py --self-test </dev/null
-          python3 src/beacon/assets/hooks/git-push-guard.py --self-test </dev/null
+          python3 src/lapbar/assets/hooks/subagent-model-guard.py --self-test </dev/null
+          python3 src/lapbar/assets/hooks/git-push-guard.py --self-test </dev/null

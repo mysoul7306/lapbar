@@ -13,8 +13,8 @@ from unittest import mock
 
 from install_fixtures import BAD_HOOK, make_assets
 
-from beacon import doctor
-from beacon import install as inst
+from lapbar import doctor
+from lapbar import install as inst
 
 
 class DoctorTest(unittest.TestCase):
@@ -90,7 +90,7 @@ class DoctorTest(unittest.TestCase):
 
     def test_run_prints_table_and_returns_exit_code(self) -> None:
         out = io.StringIO()
-        with mock.patch("beacon.assets.default_root", return_value=self.assets), \
+        with mock.patch("lapbar.assets.default_root", return_value=self.assets), \
                 contextlib.redirect_stdout(out):
             healthy = doctor.run(argparse.Namespace(target=str(self.target)))
             (self.target / "settings.json").write_text("{}", encoding="utf-8")

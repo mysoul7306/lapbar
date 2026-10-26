@@ -1,4 +1,4 @@
-"""`beacon install`: copy packaged assets into a Claude Code home and wire hooks.
+"""`lapbar install`: copy packaged assets into a Claude Code home and wire hooks.
 
 Rules: never overwrite a user's differing file without --force, back up
 settings.json before every write, and write nothing at all under --dry-run.
@@ -11,11 +11,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from beacon import assets as asset_mod
-from beacon import settings_wiring as wiring
-from beacon.assets import Asset, AssetRoot
-from beacon.backups import write_backup
-from beacon.tables import format_table
+from lapbar import assets as asset_mod
+from lapbar import settings_wiring as wiring
+from lapbar.assets import Asset, AssetRoot
+from lapbar.backups import write_backup
+from lapbar.tables import format_table
 
 DEFAULT_TARGET = "~/.claude"
 HEADERS = ("file", "status", "detail")
@@ -63,14 +63,14 @@ def run(args: argparse.Namespace) -> int:
     try:
         categories = asset_mod.parse_only(args.only)
     except ValueError as exc:
-        print(f"beacon install: {exc}", file=sys.stderr)
+        print(f"lapbar install: {exc}", file=sys.stderr)
         return 2
     target = Path(args.target).expanduser().resolve()
     result = install(target, categories, force=args.force, dry_run=args.dry_run)
     for warning in result.warnings:
         print(f"warning: {warning}", file=sys.stderr)
     title = "plan (dry run, nothing written)" if args.dry_run else "install"
-    print(f"beacon {title} -> {target}")
+    print(f"lapbar {title} -> {target}")
     print(format_table(HEADERS, [(r.item, r.status, r.detail) for r in result.rows]))
     if result.backup is not None:
         print(f"settings backup: {result.backup}")

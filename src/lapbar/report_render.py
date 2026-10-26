@@ -1,4 +1,4 @@
-"""Fixed-width plain-text rendering of the `beacon report` data (no colors)."""
+"""Fixed-width plain-text rendering of the `lapbar report` data (no colors)."""
 from __future__ import annotations
 
 from typing import Mapping, Sequence
@@ -49,7 +49,7 @@ def _table(title: str, rows: Sequence[Mapping], width: int) -> list[str]:
 def _overview(report: Mapping) -> list[str]:
     period, requests, prices = report["period"], report["requests"], report["prices"]
     return [
-        f"beacon report [{report['currency']}, {report['estimate']}]",
+        f"lapbar report [{report['currency']}, {report['estimate']}]",
         f"Period    : {period['since']} .. {period['until']} ({period['days']} days, UTC)",
         f"Sessions  : {report['sessions']:,}",
         f"Requests  : {requests['total']:,} (head {requests['head']:,}, subagent {requests['subagent']:,}, "

@@ -1,9 +1,9 @@
-"""`beacon bundle` (maintainer only): build the public assets from a live `~/.claude`.
+"""`lapbar bundle` (maintainer only): build the public assets from a live `~/.claude`.
 
-    beacon bundle --from ~/.claude            # scrub -> scan -> self-test -> write src/beacon/assets/
-    beacon bundle --check                     # scan the asset directory only (CI gate)
-    beacon bundle --from ~/.claude --preview DIR   # also write scrubbed copies to DIR for review
-    beacon bundle --from ~/.claude --map FILE      # use a substitution table kept outside the repo
+    lapbar bundle --from ~/.claude            # scrub -> scan -> self-test -> write src/lapbar/assets/
+    lapbar bundle --check                     # scan the asset directory only (CI gate)
+    lapbar bundle --from ~/.claude --preview DIR   # also write scrubbed copies to DIR for review
+    lapbar bundle --from ~/.claude --map FILE      # use a substitution table kept outside the repo
 
 Fail-closed: nothing is written to the asset directory unless the in-memory scan is clean and every
 hook that ships a `--self-test` passes on the scrubbed copy.
@@ -18,7 +18,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from beacon import scrub
+from lapbar import scrub
 
 ASSETS_DIR = Path(__file__).with_name("assets")
 MANIFEST_NAME = "manifest.json"
@@ -140,7 +140,7 @@ def run_bundle(live_root: Path, assets_dir: Path, preview: Path | None, map_path
     hits = tuple(h for item in built for h in scrub.scan_text(item.text, item.entry.asset, smap.terms, smap.scan))
     if report_hits(hits):
         return 1
-    with tempfile.TemporaryDirectory(prefix="beacon-bundle-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="lapbar-bundle-") as tmp:
         write_all(built, Path(tmp))
         tests = run_self_tests(Path(tmp), built)
     for asset, passed, tail in tests:
@@ -167,7 +167,7 @@ def configure(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--assets", default=str(ASSETS_DIR), help="asset directory (default: the package's)")
     parser.add_argument("--preview", default=None, help="also write scrubbed copies here for review")
     parser.add_argument("--map", dest="map_path", default=str(scrub.MAP_PATH),
-                        help="substitution table kept outside the repo (default: $BEACON_SCRUB_MAP or ~/.config/beacon/scrub_map.json)")
+                        help="substitution table kept outside the repo (default: $LAPBAR_SCRUB_MAP or ~/.config/lapbar/scrub_map.json)")
 
 
 def run(args: argparse.Namespace) -> int:
@@ -179,7 +179,7 @@ def run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m beacon.bundle", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(prog="python -m lapbar.bundle", description=__doc__.splitlines()[0])
     configure(parser)
     return run(parser.parse_args(argv))
 
