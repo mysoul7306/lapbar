@@ -24,9 +24,11 @@ INSTALLED, SAME, DIFFERS, MISSING = "installed", "same", "differs", "missing-ass
 DRY, WIRED, SKIPPED, ERROR = "dry", "wired", "skipped", "error"
 FAILING = frozenset({MISSING, ERROR})
 HOME_PREFIX = b"~/.claude/"
-# The target path is pasted unquoted into skills and hook commands, so it must
-# not need shell quoting.
-UNSAFE_TARGET_CHARS = frozenset(" \t\n\r'\"`$\\")
+# Categories whose text references other assets as `~/.claude/...`.
+RENDERED_CATEGORIES = frozenset({"skills", "agents"})
+# The target path is pasted unquoted into skills and hook commands (agent
+# frontmatter runs them through a shell), so it must not need shell quoting.
+UNSAFE_TARGET_CHARS = frozenset(" \t\n\r'\"`$\\;&|()<>*?[]{}!#~")
 
 
 @dataclass(frozen=True)
@@ -94,7 +96,7 @@ def install(target: Path, categories: tuple[str, ...] = asset_mod.CATEGORIES, *,
         return InstallResult((Row(wiring.SETTINGS_NAME, ERROR, str(exc)),), (), None)
     file_rows = tuple(_install_file(a, assets_root, target, force, dry_run) for a in chosen)
     deployed = frozenset(a.dst for a, r in zip(chosen, file_rows) if _deployed(r, dry_run))
-    hooks = tuple(a for a in chosen if a.is_hook)
+    hooks = tuple(a for a in chosen if a.is_wired_hook)
     wire_rows, backup = _wire_hooks(hooks, deployed, settings, target, dry_run)
     warnings = tuple(f"{r.item} differs from the packaged copy: {r.detail}"
                      for r in file_rows if r.status == DIFFERS)
@@ -125,15 +127,18 @@ def _install_file(asset: Asset, root: AssetRoot | None, target: Path,
     if dry_run:
         return Row(asset.dst, DRY, "would back up and overwrite" if exists else "would create")
     backup = write_backup(dest) if exists else None
-    _write_file(dest, payload, executable=asset.category == "hooks")
+    _write_file(dest, payload, executable=asset.is_hook)
     detail = f"overwritten (--force), backup {backup.name}" if backup else ""
     return Row(asset.dst, INSTALLED, detail)
 
 
 def render_payload(asset: Asset, payload: bytes, target: Path) -> bytes:
-    """Skills reference scripts as `~/.claude/...`; pin them to the install target,
-    since the Workflow tool is not guaranteed to expand `~`."""
-    if asset.category != "skills":
+    """Pin `~/.claude/...` references to the install target.
+
+    Skills name scripts for the Workflow tool, which is not guaranteed to expand
+    `~`; agent frontmatter names the hook commands it runs.
+    """
+    if asset.category not in RENDERED_CATEGORIES:
         return payload
     return payload.replace(HOME_PREFIX, (str(target) + "/").encode("utf-8"))
 

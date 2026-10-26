@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from install_fixtures import FAKE_FILES, list_files, make_assets
+from install_fixtures import FAKE_FILES, list_files, make_assets, rendered
 
 from lapbar import assets as asset_mod
 from lapbar import install as inst
@@ -44,8 +44,9 @@ class FreshInstallTest(InstallTestCase):
     def test_copies_files_marks_hooks_executable_and_wires_settings(self) -> None:
         result = self.install()
         self.assertEqual(result.exit_code, 0)
-        for rel, text in FAKE_FILES.items():
-            self.assertEqual((self.target / rel).read_text(encoding="utf-8"), text)
+        for rel in FAKE_FILES:
+            self.assertEqual((self.target / rel).read_text(encoding="utf-8"),
+                             rendered(rel, self.target))
             self.assertEqual(self.statuses(result)[rel], inst.INSTALLED)
         self.assertTrue(os.access(self.target / "hooks/guard.py", os.X_OK))
         self.assertFalse(os.access(self.target / "rules/a.md", os.X_OK))
@@ -72,7 +73,7 @@ class FreshInstallTest(InstallTestCase):
         self.assertIn(f"{self.target}/scripts/x.js", installed)
         self.assertEqual(installed.count("~/.claude/"), 0)
         rule = (self.target / "rules/a.md").read_text(encoding="utf-8")
-        self.assertEqual(rule, "see ~/.claude/rules/\n", "only skills are rendered")
+        self.assertEqual(rule, "see ~/.claude/rules/\n", "rules are not rendered")
         again = self.install()
         self.assertEqual(self.statuses(again)["commands/lane.md"], inst.SAME)
 
@@ -83,6 +84,59 @@ class FreshInstallTest(InstallTestCase):
     def test_parse_only_rejects_unknown_category(self) -> None:
         with self.assertRaises(ValueError):
             asset_mod.parse_only("rules,memory")
+
+
+class AgentScopedHookTest(InstallTestCase):
+    def all_commands(self) -> list[str]:
+        return [h["command"] for entries in self.settings()["hooks"].values()
+                for entry in entries for h in entry["hooks"]]
+
+    def test_event_null_hook_is_installed_executable_but_not_wired(self) -> None:
+        result = self.install()
+        self.assertEqual(result.exit_code, 0)
+        path = self.target / "hooks/agent-guard.py"
+        self.assertEqual(self.statuses(result)["hooks/agent-guard.py"], inst.INSTALLED)
+        self.assertTrue(os.access(path, os.X_OK))
+        self.assertFalse(any("agent-guard" in c for c in self.all_commands()))
+        self.assertFalse(any("agent-guard" in r.item and "[" in r.item for r in result.rows))
+        self.assertEqual(len(self.all_commands()), 2, "only the two evented hooks are wired")
+
+    def test_agents_pin_home_prefix_to_target(self) -> None:
+        self.install()
+        body = (self.target / "agents/reviewer.md").read_text(encoding="utf-8")
+        self.assertIn(f"python3 {self.target}/hooks/agent-guard.py", body)
+        self.assertEqual(body.count("~/.claude/"), 0)
+        again = self.install()
+        self.assertEqual(self.statuses(again)["agents/reviewer.md"], inst.SAME)
+
+
+class ManifestProbeTest(unittest.TestCase):
+    def load(self, hooks: list[dict]) -> tuple[asset_mod.Asset, ...]:
+        with tempfile.TemporaryDirectory() as tmp:
+            return asset_mod.load_manifest(make_assets(Path(tmp), {"hooks": hooks}, files={}))
+
+    def test_probes_are_parsed_and_default_to_empty(self) -> None:
+        probe = {"name": "p", "input": {"tool_name": "Bash"}, "expect": "deny"}
+        probed, plain = self.load([
+            {"src": "hooks/a.py", "event": None, "probes": [probe]},
+            {"src": "hooks/b.py", "event": "PreToolUse", "matcher": "Bash"}])
+        self.assertEqual(probed.probes, (asset_mod.Probe("p", {"tool_name": "Bash"}, "deny"),))
+        self.assertEqual(plain.probes, ())
+        self.assertEqual((probed.is_hook, probed.is_wired_hook), (True, False))
+        self.assertEqual((plain.is_hook, plain.is_wired_hook), (True, True))
+        self.assertIsInstance(hash(probed), int, "assets stay hashable")
+
+    def test_bad_probe_is_rejected(self) -> None:
+        bad = ({"name": "p", "input": {}, "expect": "ask"},
+               {"name": "p", "input": "x", "expect": "deny"},
+               {"name": "", "input": {}, "expect": "allow"})
+        for probe in bad:
+            with self.subTest(probe=probe), self.assertRaises(ValueError):
+                self.load([{"src": "hooks/a.py", "event": None, "probes": [probe]}])
+
+    def test_non_hook_category_is_never_a_hook(self) -> None:
+        rule = asset_mod.Asset("rules", "rules/a.md", "rules/a.md")
+        self.assertEqual((rule.is_hook, rule.is_wired_hook), (False, False))
 
 
 class ReinstallTest(InstallTestCase):
@@ -263,7 +317,8 @@ class SafetyTest(InstallTestCase):
         self.assertEqual(command, f"python3 {self.target}/hooks/guard.py")
 
     def test_target_needing_shell_quoting_is_refused(self) -> None:
-        for name in ("my claude", "it's"):
+        names = ("my claude", "it's") + tuple(f"a{char}b" for char in ";&|()<>*?[]{}!#~")
+        for name in names:
             with self.subTest(name=name):
                 target = self.base / name / ".claude"
                 for dry_run in (False, True):
@@ -299,13 +354,23 @@ class MissingAssetTest(InstallTestCase):
     def test_packaged_manifest_lists_v1_assets(self) -> None:
         manifest = asset_mod.load_manifest()
         by_cat = {c: [a.dst for a in manifest if a.category == c] for c in asset_mod.CATEGORIES}
-        self.assertEqual(len(by_cat["hooks"]), 3)
+        self.assertEqual(len(by_cat["hooks"]), 4)
         self.assertEqual(len(by_cat["scripts"]), 3)
         self.assertEqual(len(by_cat["rules"]), 5)
         self.assertEqual(by_cat["skills"], ["commands/lane.md", "commands/review-lane.md"])
-        self.assertEqual(by_cat["agents"], ["agents/review-readonly.md"])
+        self.assertEqual(by_cat["agents"], ["agents/review-readonly.md", "agents/scout-git.md"])
         selftests = {a.dst for a in manifest if a.selftest}
-        self.assertEqual(selftests, {"hooks/subagent-model-guard.py", "hooks/git-push-guard.py"})
+        self.assertEqual(selftests, {"hooks/subagent-model-guard.py", "hooks/git-push-guard.py",
+                                     "hooks/git-readonly-guard.py"})
+        hooks = {a.dst: a for a in manifest if a.is_hook}
+        expects = {dst: [p.expect for p in h.probes] for dst, h in hooks.items()}
+        self.assertEqual(expects, {"hooks/subagent-model-guard.py": ["deny", "allow"],
+                                   "hooks/git-push-guard.py": ["deny", "allow"],
+                                   "hooks/git-readonly-guard.py": ["deny", "allow"],
+                                   "hooks/memory-lint-hook.py": []})
+        wired = {a.dst for a in manifest if a.is_wired_hook}
+        self.assertNotIn("hooks/git-readonly-guard.py", wired)
+        self.assertEqual(len(wired), 3)
 
     def test_manifest_rejects_escaping_paths(self) -> None:
         bad = {"rules": [{"src": "rules/a.md", "dst": "../outside.md"}]}
