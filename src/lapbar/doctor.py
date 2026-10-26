@@ -14,7 +14,7 @@ import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
-from itertools import dropwhile, takewhile
+from itertools import dropwhile, groupby, takewhile
 from pathlib import Path
 
 from lapbar import assets as asset_mod
@@ -35,13 +35,26 @@ DECISION_ALLOW, DECISION_DENY = "allow", "deny"
 NOT_JSON_NOTE = "stdout is not a single JSON object"
 HOME_TOKENS = ("~", "$HOME", "${HOME}")
 PYTHON_SUFFIX = ".py"
-# Settings check: a hook command's executed file is its first word, or the first operand
-# after one of these interpreters (`uv` only after `run`).
-INTERPRETERS = frozenset({"python3", "python", "bash", "sh", "zsh", "node", "uv"})
-UV_LAUNCHER, UV_RUN = "uv", "run"
-INLINE_CODE_FLAGS = frozenset({"-c", "-m", "-e"})  # code or a module follows, not a file
+# Settings check: in every simple command of a hook command, the executed file is its first
+# word, or the first operand after an interpreter (`uv` only after `run`, `env` is skipped).
+PYTHON_KIND, SHELL_KIND, NODE_KIND, UV_KIND = "python", "shell", "node", "uv"
+PYTHON_NAME = re.compile(r"python[0-9.]*")
+SHELL_NAMES = frozenset({"bash", "sh", "zsh"})
+ENV_LAUNCHER, UV_RUN = "env", "run"
+# Flags after which inline code or a module follows instead of a script file. A shell's `-e`
+# is errexit, so a script still follows it.
+INLINE_CODE_FLAGS = {
+    PYTHON_KIND: frozenset({"-c", "-m"}),
+    NODE_KIND: frozenset({"-e", "-p", "--eval"}),
+    SHELL_KIND: frozenset({"-c"}),
+    UV_KIND: frozenset({"-m", "--module"}),
+}
+SHELL_BUNDLED_CODE_FLAG = re.compile(r"-[A-Za-z]*c[A-Za-z]*")  # -lc, -ec, -ic
 ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 SHELL_OPERATOR_CHARS = frozenset("();<>|&")
+REDIRECT_CHARS = frozenset("<>")
+COMMENT_START = "#"
+QUOTED_HOME_NOTE = "quoted ~ is not expanded by the shell"
 
 
 @dataclass(frozen=True)
@@ -216,11 +229,13 @@ def _settings_check(command: str) -> Check:
     except ValueError:
         return Check("settings", item, FAIL, "cannot split command (unclosed quote)")
     targets = exec_targets(tokens)
-    argument_paths = sum(_is_path_candidate(t) for t in tokens) - len(targets)
-    expanded = [(t, _expand_home(t)) for t in targets]
+    argument_paths = sum(_is_path_candidate(t) and t not in targets for t in tokens)
+    quoted = [t for t in targets if _is_quoted_home(command, t)]
+    expanded = [(t, _expand_home(t)) for t in targets if t not in quoted]
     unchecked = [t for t, path in expanded if "$" in path or not path.startswith("/")]
     checked = [(t, Path(path)) for t, path in expanded if t not in unchecked]
-    problems = [p for p in (_path_problem(t, path) for t, path in checked) if p]
+    problems = ([f"{QUOTED_HOME_NOTE}: {t}" for t in quoted]
+                + [p for p in (_path_problem(t, path) for t, path in checked) if p])
     if problems:
         return Check("settings", item, FAIL, "; ".join(problems))
     notes = unchecked + ([f"{argument_paths} argument path(s)"] if argument_paths else [])
@@ -231,36 +246,78 @@ def _settings_check(command: str) -> Check:
 
 
 def split_command(command: str) -> list[str]:
-    """Shell-like split that also cuts `>>`, `|`, `;` and `&&` out of the words around them."""
+    """Shell-like split that also cuts `>>`, `|`, `;` and `&&` out of the words around them.
+
+    A `#` inside a word is a plain character; a word that starts with `#` begins a comment,
+    and the rest of the command is dropped (quoting is not tracked for that word).
+    """
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
-    return list(lexer)
+    lexer.commenters = ""
+    return list(takewhile(lambda t: not t.startswith(COMMENT_START), lexer))
 
 
 def exec_targets(tokens: list[str]) -> tuple[str, ...]:
-    """The file a hook command runs: its first word when that is a path, or the script an
-    interpreter is given. Arguments, log files and redirect targets are not targets."""
-    words = list(dropwhile(lambda t: ENV_ASSIGNMENT.match(t) is not None, tokens))
+    """The files a hook command runs: in each simple command, its first word when that is a
+    path, or the script an interpreter is given. Arguments and redirect targets are not."""
+    found = (t for words in simple_commands(tokens) for t in _command_targets(words))
+    return tuple(dict.fromkeys(found))
+
+
+def simple_commands(tokens: list[str]) -> tuple[tuple[str, ...], ...]:
+    """Words of each simple command between control operators, redirections removed
+    (the operator, its target, and an fd number right before it)."""
+    redirects = [i for i, t in enumerate(tokens) if _is_redirect(t)]
+    fds = {i - 1 for i in redirects if i > 0 and tokens[i - 1].isdigit()}
+    dropped = fds | {j for i in redirects for j in (i, i + 1)}
+    kept = [t for i, t in enumerate(tokens) if i not in dropped]
+    return tuple(tuple(group) for is_op, group in groupby(kept, key=_is_operator) if not is_op)
+
+
+def _command_targets(words: tuple[str, ...]) -> tuple[str, ...]:
+    words = tuple(dropwhile(lambda t: ENV_ASSIGNMENT.match(t) is not None, words))
     if not words:
         return ()
-    head, args = words[0], list(takewhile(lambda t: not _is_operator(t), words[1:]))
+    head, args = words[0], list(words[1:])
     own = (head,) if _is_path_candidate(head) else ()
     name = Path(head).name
-    if name not in INTERPRETERS:
+    if name == ENV_LAUNCHER:
+        rest = dropwhile(lambda t: t.startswith("-") or ENV_ASSIGNMENT.match(t) is not None, args)
+        return own + _command_targets(tuple(rest))
+    kind = _interpreter_kind(name)
+    if kind is None:
         return own
-    if name == UV_LAUNCHER:
+    if kind == UV_KIND:
         args = args[args.index(UV_RUN) + 1:] if UV_RUN in args else []
-    script = _first_operand(args)
+    script = _first_operand(args, kind)
     return own + ((script,) if script is not None and _is_path_candidate(script) else ())
 
 
-def _first_operand(args: list[str]) -> str | None:
+def _interpreter_kind(name: str) -> str | None:
+    if PYTHON_NAME.fullmatch(name):
+        return PYTHON_KIND
+    if name in SHELL_NAMES:
+        return SHELL_KIND
+    return name if name in (NODE_KIND, UV_KIND) else None
+
+
+def _first_operand(args: list[str], kind: str) -> str | None:
     for token in args:
-        if token in INLINE_CODE_FLAGS:
+        if _is_inline_code_flag(token, kind):
             return None
         if not token.startswith("-"):
             return token
     return None
+
+
+def _is_inline_code_flag(token: str, kind: str) -> bool:
+    if token in INLINE_CODE_FLAGS[kind]:
+        return True
+    return kind == SHELL_KIND and SHELL_BUNDLED_CODE_FLAG.fullmatch(token) is not None
+
+
+def _is_redirect(token: str) -> bool:
+    return _is_operator(token) and any(ch in REDIRECT_CHARS for ch in token)
 
 
 def _is_operator(token: str) -> bool:
@@ -271,6 +328,14 @@ def _is_path_candidate(token: str) -> bool:
     if token.startswith("-") or "://" in token:
         return False
     return "/" in token or token.startswith(HOME_TOKENS)
+
+
+def _is_quoted_home(command: str, token: str) -> bool:
+    """The shell expands neither a quoted `~` nor a single-quoted `$HOME`."""
+    if not token.startswith(HOME_TOKENS):
+        return False
+    quotes = "\"'" if token.startswith("~") else "'"
+    return any(quote + token in command for quote in quotes)
 
 
 def _expand_home(token: str) -> str:

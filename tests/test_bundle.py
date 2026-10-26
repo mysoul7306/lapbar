@@ -72,6 +72,30 @@ class SkipTest(BundleBuildCase):
         self.assertEqual((self.assets / HOOK_ASSET).read_text(encoding="utf-8"), KEPT_HOOK)
         self.assertEqual((self.assets / HOOK_ASSET).stat().st_mtime_ns, before)
 
+    def run_bundle_output(self, live_root: Path) -> tuple[int, str]:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = bundle.run_bundle(live_root, self.assets, None, self.map_path)
+        return code, out.getvalue()
+
+    def test_live_root_that_is_not_a_directory_is_an_error(self) -> None:
+        self.write(self.assets / AGENT_ASSET, "kept agent\n")
+        for live_root in (self.live.parent / ".claud", self.map_path):
+            code, out = self.run_bundle_output(live_root)
+            self.assertEqual(code, 1, out)
+            self.assertEqual([ln for ln in out.splitlines() if ln.startswith("ERROR")],
+                             [f"ERROR live root is not a directory: {live_root}"])
+            self.assertNotIn("SKIP", out)
+        self.assertEqual((self.assets / HOOK_ASSET).read_text(encoding="utf-8"), KEPT_HOOK)
+
+    def test_no_entry_read_from_live_is_an_error(self) -> None:
+        self.live.mkdir(parents=True)
+        self.write(self.assets / AGENT_ASSET, "kept agent\n")
+        code, out = self.run_bundle_output(self.live)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"ERROR no manifest entry found under {self.live}, nothing to bundle", out)
+        self.assertNotIn("wrote", out)
+
 
 class UnrenderTest(BundleBuildCase):
     def test_installed_absolute_prefix_is_turned_back_into_home_form(self) -> None:
@@ -79,8 +103,13 @@ class UnrenderTest(BundleBuildCase):
         built = {b.entry.asset: b for b in self.build()}
         self.assertEqual(built[AGENT_ASSET].text, AGENT_TEMPLATE.format(prefix="~/.claude/"))
 
-    def test_resolved_prefix_is_also_turned_back(self) -> None:
-        self.write_live_agent(f"{self.live.resolve()}/")
+    def test_prefix_resolved_through_a_symlink_is_also_turned_back(self) -> None:
+        real = self.live.parent.parent / "real" / ".claude"
+        link = self.live.parent.parent / "link"
+        link.symlink_to(real.parent, target_is_directory=True)
+        self.live = link / ".claude"
+        self.assertNotEqual(str(self.live.absolute()), str(self.live.resolve()))
+        self.write(real / AGENT_ASSET, AGENT_TEMPLATE.format(prefix=f"{real.resolve()}/"))
         built = {b.entry.asset: b for b in self.build()}
         self.assertEqual(built[AGENT_ASSET].text, AGENT_TEMPLATE.format(prefix="~/.claude/"))
 

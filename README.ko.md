@@ -69,7 +69,7 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 | hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | model, effort 리터럴 강제, 상위 티어는 표지 필요. `--self-test` 80 케이스 |
 | hook | `hooks/git-push-guard.py` (PreToolUse: Bash) | develop / main / master push deny, fail-closed. `--self-test` 60 케이스 |
 | hook | `hooks/memory-lint-hook.py` (SessionStart) + `scripts/memory-lint.py` | 메모리 디렉토리 점검, 문제 있을 때만 알림 |
-| hook | `hooks/git-readonly-guard.py` (에이전트 전용 PreToolUse: Bash, `settings.json` 에는 안 들어감) | `scout-git` 에이전트 안에서 읽기 전용 git 만 통과시키는 allowlist: 파이프, 리다이렉트, 쓰기 서브커맨드, 모르는 옵션은 deny, `--no-ext-diff` 강제. `--self-test` 52 케이스 |
+| hook | `hooks/git-readonly-guard.py` (에이전트 전용 PreToolUse: Bash, `settings.json` 에는 안 들어감) | `scout-git` 에이전트 안에서 읽기 전용 git 만 통과시키는 allowlist: 파이프, 리다이렉트, 쓰기 서브커맨드, 모르는 옵션은 deny, `--no-ext-diff` 강제. `--self-test` 76 케이스 |
 | rule | `rules/zsh-pitfalls.md` | Bash 툴의 zsh 에서 조용히 어긋나는 함정 모음 (실사고 기반) |
 | rule | `rules/security.md` | 출력 위생 - 설정, env, wrapper 를 볼 때 값이 새지 않게 |
 | rule | `rules/memory-scope.md` | 메모리를 어느 scope 에 둘지 판정하는 4 바구니 |

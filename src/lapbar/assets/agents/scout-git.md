@@ -25,8 +25,8 @@ You are a git history scout. The parent is planning a change and wants to know w
 - Pipes, redirects, `;`, `&&`, `$(...)`, backticks, parentheses, braces and `#`, even inside quotes. Run separate commands instead; for -S/-G pick a substring without these characters.
 - Reflog selectors with braces such as `@{1}`; use `HEAD~1` or `git reflog show -n 5`.
 - Unquoted globs; quote patterns like `'*.py'`.
-- `-C` or path arguments outside the working directory, and global options other than `-C`, `--no-pager` and `--no-optional-locks`.
-- `%G` signature placeholders in `--format`, and `git shortlog` without a revision (add `HEAD`).
+- `-C` or path arguments outside the working directory, and global options other than `-C`, `--no-pager` and `--no-optional-locks` (put global options before the subcommand; `git status` gets `--no-optional-locks` automatically).
+- `%G` signature placeholders in `--format`, also with a modifier (`%+G`, `%-G`, `% G`), and `git shortlog` without a revision (add `HEAD` or `--all`).
 If a command is denied, read the reason, narrow the command, and continue. Do not ask for the hook to be disabled.
 
 ## What you return

@@ -266,6 +266,60 @@ class SettingsCheckTest(DoctorCase):
             row = self.row(checks, command)
             self.assertEqual((row.result, row.detail), (doctor.FAIL, f"missing: {token}"))
 
+    def assert_rows(self, expected: dict[str, str]) -> dict[str, doctor.Check]:
+        """`expected` maps a command to PASS, or to its exact FAIL detail. Rows are keyed by
+        the full command: long tempdir paths would otherwise truncate to the same tail."""
+        self.add_commands(*expected)
+        with mock.patch.object(doctor, "DETAIL_MAX", 10_000):
+            checks = self.settings_checks()
+        for command, want in expected.items():
+            row = checks[command]
+            got = row.result if want == doctor.PASS else row.detail
+            self.assertEqual(got, want, (command, row.result, row.detail))
+        return checks
+
+    def test_inline_code_flags_follow_the_interpreter(self) -> None:
+        script = self.write("other/run.sh", "echo hi\n")
+        gone = self.base / "other/nope.sh"
+        expected = {f'bash -lc "{script} done"': doctor.PASS, f"sh -ec '{gone} x'": doctor.PASS,
+                    f"zsh -ic '{gone}'": doctor.PASS, f"node -e 'require(\"{gone}\")'": doctor.PASS,
+                    f"node -p '{gone}'": doctor.PASS, f"node --eval '{gone}'": doctor.PASS,
+                    f"python3 -m {gone}": doctor.PASS, f"bash -e {gone}": f"missing: {gone}",
+                    f"python3 -e {gone}": f"missing: {gone}"}
+        self.assert_rows(expected)
+
+    def test_every_simple_command_is_checked(self) -> None:
+        good = self.write("other/hook.py", "print('ok')\n")
+        gone = self.base / "p/gone.py"
+        expected = {f"cd {self.base} && python3 {gone}": f"missing: {gone}",
+                    f"cat | python3 {gone} --x": f"missing: {gone}",
+                    f"true; {gone} arg": f"missing: {gone}",
+                    f"false || bash {gone}": f"missing: {gone}",
+                    f"2>/dev/null {good} & wait": doctor.PASS,
+                    f"python3 {good} >> /var/log/none.log": doctor.PASS,
+                    f"python3 {good} 2> {gone} < {gone}": doctor.PASS,
+                    f"/usr/bin/env FLAG=1 python3 {gone}": f"missing: {gone}",
+                    f"python3.12 {gone}": f"missing: {gone}"}
+        self.assert_rows(expected)
+
+    def test_hash_inside_a_word_is_part_of_the_path(self) -> None:
+        self.assertEqual(doctor.split_command("python3 /a/C#/x.py"), ["python3", "/a/C#/x.py"])
+        hook = self.write("other/C#/x.py", "print('ok')\n")
+        expected = {f"python3 {hook}": doctor.PASS, f"python3 {hook} # see /no/such": doctor.PASS}
+        checks = self.assert_rows(expected)
+        self.assertEqual(checks[f"python3 {hook} # see /no/such"].detail, "1 path(s) ok")
+
+    def test_quoted_home_is_not_expanded(self) -> None:
+        self.write("home/tools/hook.py", "print('ok')\n")
+        quoted = "quoted ~ is not expanded by the shell: "
+        expected = {'python3 "~/tools/hook.py"': quoted + "~/tools/hook.py",
+                    "python3 '~/tools/hook.py' -v": quoted + "~/tools/hook.py",
+                    "python3 '$HOME/tools/hook.py'": quoted + "$HOME/tools/hook.py",
+                    'python3 "$HOME/tools/hook.py"': doctor.PASS,
+                    "bash -lc '~/tools/run.sh arg'": doctor.PASS}
+        with mock.patch.dict(os.environ, {"HOME": str(self.base / "home")}):
+            self.assert_rows(expected)
+
     def test_long_command_item_is_truncated(self) -> None:
         long_path = self.write("d/" + "x" * 90 + ".py", "pass\n")
         self.add_commands(f"python3 {long_path}")

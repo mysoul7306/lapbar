@@ -73,6 +73,10 @@ ALLOW_COMMANDS = (
     "git rev-parse --abbrev-ref HEAD",
     "git log --since '2 weeks' --author alice -- src",
     "git ls-files -- '*.py'",
+    "git grep -n '/api/v1' -- src",
+    "git grep -n ../x -- src",
+    "git shortlog -s -n --all",
+    "git tag --no-contains HEAD",
 )
 
 DENY_COMMANDS = (
@@ -145,6 +149,13 @@ DENY_COMMANDS = (
     "git log --format '%G?'",
     "git shortlog -s -n",
     "git shortlog -s -n -- src",
+    "git log -n 1 --format=%+GK",
+    "git log -n 1 --format='% G?'",
+    "git log --pretty=format:%-GS",
+    "git grep -n TODO ../other -- src",
+    "git grep -n TODO -- /etc",
+    "git grep -e TODO /etc/hosts",
+    "git status --no-optional-locks",
     "",
 )
 
@@ -199,6 +210,22 @@ class GuardDecisionTest(unittest.TestCase):
         finally:
             os.rmdir(outside)
 
+    def _reason(self, command):
+        return self.hook.evaluate(_payload(command, self.cwd))["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_signature_placeholder_with_format_modifier_reason(self):
+        for command in ("git log -n 1 --format=%+GK", "git log -n 1 --format='% G?'", "git log --pretty=format:%-GS"):
+            with self.subTest(command=command):
+                self.assertIn("%G format placeholders run gpg", self._reason(command))
+
+    def test_grep_pattern_is_not_a_path_but_later_paths_are(self):
+        self.assertIn("path ../other is outside", self._reason("git grep -n TODO ../other -- src"))
+        self.assertIn("path /etc is outside", self._reason("git grep -n TODO -- /etc"))
+
+    def test_no_optional_locks_after_subcommand_reason(self):
+        self.assertIn("--no-optional-locks is a global option; put it before the subcommand "
+                      "(status gets it automatically)", self._reason("git status --no-optional-locks"))
+
     def test_diff_gets_no_ext_diff_and_keeps_other_keys(self):
         payload = _payload("git diff --stat", self.cwd, description="d", timeout=5000)
         updated = self.hook.evaluate(payload)["hookSpecificOutput"]["updatedInput"]
@@ -208,12 +235,12 @@ class GuardDecisionTest(unittest.TestCase):
     def test_no_ext_diff_goes_after_subcommand_with_globals(self):
         updated = self.hook.evaluate(_payload("git --no-pager -C sub show HEAD", self.cwd))
         command = updated["hookSpecificOutput"]["updatedInput"]["command"]
-        self.assertEqual(command, "git --no-pager -C sub show --no-ext-diff --no-textconv HEAD")
+        self.assertEqual(command, "git --no-pager -C sub show --no-ext-diff --no-textconv --no-show-signature HEAD")
 
     def test_no_ext_diff_not_duplicated(self):
         output = self.hook.evaluate(_payload("git log --no-ext-diff -n 1", self.cwd))
         self.assertEqual(output["hookSpecificOutput"]["updatedInput"]["command"],
-                         "git log --no-textconv --no-ext-diff -n 1")
+                         "git log --no-textconv --no-show-signature --no-ext-diff -n 1")
 
     def test_status_gets_no_optional_locks_and_keeps_other_keys(self):
         output = self.hook.evaluate(_payload("git status", self.cwd, run_in_background=False))
@@ -228,14 +255,22 @@ class GuardDecisionTest(unittest.TestCase):
     def test_rewrites(self):
         cases = (
             ("git diff --stat", "git diff --no-ext-diff --no-textconv --stat"),
-            ("git log --no-ext-diff -n 1", "git log --no-textconv --no-ext-diff -n 1"),
-            ("git log --no-textconv -n 1", "git log --no-ext-diff --no-textconv -n 1"),
-            ("git show --no-ext-diff --no-textconv HEAD", "git show --no-ext-diff --no-textconv HEAD"),
+            ("git log --no-ext-diff -n 1", "git log --no-textconv --no-show-signature --no-ext-diff -n 1"),
+            ("git log --no-textconv -n 1", "git log --no-ext-diff --no-show-signature --no-textconv -n 1"),
+            ("git show --no-ext-diff --no-textconv --no-show-signature HEAD",
+             "git show --no-ext-diff --no-textconv --no-show-signature HEAD"),
             ("git --no-optional-locks status -s", "git --no-optional-locks status -s"),
             ("git --no-pager status", "git --no-optional-locks --no-pager status"),
             ('git ls-files -- "*.py"', "git ls-files -- '*.py'"),
-            ('git reflog show --grep "a b"', "git reflog show --grep 'a b'"),
-            ("git blame -L 10,20 f", "git blame -L 10,20 f"),
+            ('git reflog show --grep "a b"',
+             "git reflog show --no-ext-diff --no-textconv --no-show-signature --grep 'a b'"),
+            ("git stash list -p", "git stash list --no-ext-diff --no-textconv --no-show-signature -p"),
+            ("git stash show --stat", "git stash show --no-ext-diff --no-textconv --no-show-signature --stat"),
+            ("git reflog show -p -n 3", "git reflog show --no-ext-diff --no-textconv --no-show-signature -p -n 3"),
+            ("git blame -L 10,20 f", "git blame --no-textconv -L 10,20 f"),
+            ("git blame --no-textconv f", "git blame --no-textconv f"),
+            ("git -C sub stash list", "git -C sub stash list --no-ext-diff --no-textconv --no-show-signature"),
+            ("git reflog", "git reflog"),
         )
         for command, expected in cases:
             with self.subTest(command=command):
@@ -244,11 +279,11 @@ class GuardDecisionTest(unittest.TestCase):
     def test_absolute_path_inside_cwd_is_allowed(self):
         inside = os.path.join(os.path.realpath(self.cwd), "sub", "a.py")
         self.assertEqual(self._rewritten("git log -- " + inside),
-                         "git log --no-ext-diff --no-textconv -- " + inside)
+                         "git log --no-ext-diff --no-textconv --no-show-signature -- " + inside)
 
     def test_dotdot_path_resolves_from_dash_c_directory(self):
         self.assertEqual(self._rewritten("git -C sub log -- ../a.py"),
-                         "git -C sub log --no-ext-diff --no-textconv -- ../a.py")
+                         "git -C sub log --no-ext-diff --no-textconv --no-show-signature -- ../a.py")
 
     def test_symlinked_absolute_git_to_real_git_is_allowed(self):
         link = os.path.join(self.cwd, "git")
