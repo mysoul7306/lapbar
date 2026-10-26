@@ -2,15 +2,15 @@
 """git push guard (PreToolUse: Bash).
 
 **Always denies** a `git push` that goes to develop / main / master. The rule that push belongs to the
-user (~/.claude/rules/git-workflow.md) broke twice when it was only written down (2026-07-08 a workflow
-description misread as a go-ahead, 2026-10-13 a reply to a sign-off list misread). 2026-10-13 user request: a matcher cannot catch it, so build a hook that reliably blocks the push.
+owner (~/.claude/rules/git-workflow.md) broke twice when it was only written down (a workflow description
+misread as a go-ahead, then a reply to a sign-off list misread as delegation). A matcher cannot catch it, so this hook blocks the push.
 
 Judgement is conservative (fail-closed):
 - An explicit refspec (`origin develop`, `HEAD:develop`, `+develop`, `refs/heads/main`, `develop:develop`)
   is judged by its destination (after `:`, or the whole spec if there is none). Deletes (`:develop`, `--delete develop`) are blocked too.
 - With no refspec (`git push`, `git push origin`, `git push -u origin HEAD`) the current branch and `@{push}`
   (a feature branch whose upstream points at develop) are resolved with real git. If that fails, deny.
-- `--all` and `--mirror` are denied. `--dry-run` gets no exception (the user runs dry-runs).
+- `--all` and `--mirror` are denied. `--dry-run` gets no exception (the owner runs dry-runs).
 - A git push inside quotes, `bash -c` or an ssh remote string is denied when it cannot be tokenized (the message says to move it out).
 - A feature branch push passes untouched (no output).
 
@@ -39,8 +39,8 @@ KNOWN_SUBCOMMANDS = frozenset("""add am apply archive bisect blame branch bundle
  log ls-files ls-remote ls-tree merge merge-base mv name-rev notes prune pull push rebase reflog remote repack replace
  reset restore rev-list rev-parse revert rm shortlog show show-ref stash status submodule switch symbolic-ref tag
  update-index update-ref var version worktree""".split())
-GUIDE = ("Pushing develop / main is the user's job - Claude pushes feature branches only, does the merge, then "
-         "leaves it as \"push = user\". (rule ~/.claude/rules/git-workflow.md)")
+GUIDE = ("Pushing develop / main is the owner's job - Claude pushes feature branches only, does the merge, then "
+         "leaves it as \"push = owner\". (rule ~/.claude/rules/git-workflow.md)")
 SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\||\n")
 # Allows `/` before `git` so /usr/bin/git and ./git are caught too (2026-10-22 security review, round 4).
 RAW_PUSH = re.compile(r"(?<![\w.-])git\b(?:\s+-[^\s]+(?:\s+[^\s]+)?)*\s+push(?![\w./-])")
@@ -319,7 +319,7 @@ def self_test():
         case('--force-with-lease origin feat/x → pass', 'git push --force-with-lease origin feat/x', work, False)
         case('-c alias.p=push p origin develop → deny', 'git -c alias.p=push p origin develop', work, True, "alias")
         case('git config alias definition → deny', "git config --global alias.p 'push origin develop'", work, True, "alias")
-        case('-c push.default=x, no refspec → deny', 'git -c push.default=upstream push', work, True, "cannot be judged")
+        case('-c push.default=x, no refspec → deny', 'git -c push.default=upstream push', work, True, "a config override")
         case('-c user.name=x origin feat/x → pass', 'git -c user.name=x push origin feat/x', work, False)
         case('-c Alias.p (uppercase) → deny', 'git -c Alias.p=push p origin develop', work, True, 'alias')
         case('-c PUSH.default, no refspec → deny', 'git -c PUSH.default=upstream push', work, True, 'cannot be judged')
@@ -366,7 +366,7 @@ def self_test():
         case("repo alias st (status) → pass", "git st", work, False)
         case("unknown subcommand (not an alias) → pass", "git whatchanged", work, False)
         # --- hidden push (fail-closed)
-        case("push inside bash -c → deny", "bash -c 'git push origin develop'", work, True, "cannot be judged")
+        case("push inside bash -c → deny", "bash -c 'git push origin develop'", work, True, "inside quotes, bash -c")
         case("push inside an ssh remote string → deny", "ssh gw 'cd repo && git push origin feat/x'", work, True)
         case("mismatched quotes → deny", "git push origin feat/x && echo \"x", work, True)
         # --- not git

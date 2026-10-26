@@ -17,7 +17,7 @@ Check rules:
   3. Up to FABLE_MAX fable agent() **call sites** per Workflow script. One site inside a loop that runs N times cannot be
      counted statically - the run-count limit is left to the rule (rules/subagent-review.md) and to announcing the scale.
   4. fable and haiku only with a mark **inside that call** (prompt for Agent, inside the parentheses for agent()).
-     The model can write the mark itself; that limit is known and treated as a rule violation.
+     The model could write the mark itself; that limit is known, and writing a mark without owner approval is treated as a rule violation.
   5. effort is a lowercase literal from EFFORTS. Levels above the cap EFFORT_CAP (default xhigh, set with env
      SUBAGENT_EFFORT_CAP - put it in settings.json env to cover every session) need a `[owner-approved: <level>]` mark
      inside that call.
@@ -506,7 +506,7 @@ def _self_test():
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "fable", "effort": "high"}}, True, "to use fable"),
         ("Agent fable with mark → pass",
          {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: fable] subtle design judgment", "model": "fable", "effort": "xhigh"}}, False, None),
-        ("Workflow fable without mark → deny (reproduces the 2026-10-13 verification-lane incident)",
+        ("Workflow fable without mark → deny (regression: an unmarked fable call in a parallel lane)",
          wf("const r = await parallel(G.map(g => () => agent(g.p, { label: 'verify:' + g.key, model: 'fable', effort: 'high' })))"), True, "fable agent() (line 1) is allowed only"),
         ("Workflow fable mark only in a comment outside the call → deny",
          wf("// [owner-approved: fable]\nconst a = await agent('p', {model: 'fable', effort: 'high'})"), True, "fable agent() (line 2) is allowed only"),
@@ -546,12 +546,12 @@ def _self_test():
         ("Agent haiku with mark → pass",
          {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: haiku] log parsing", "model": "haiku", "effort": "low"}}, False, None),
         ("regex literal /[/*]/ opens a comment and breaks parsing → deny (fail-closed)",
-         wf("const r = /[/*]/\nconst a = await agent('p', {model: 'haiku', effort: 'low'})"), True, "cannot be parsed"),
+         wf("const r = /[/*]/\nconst a = await agent('p', {model: 'haiku', effort: 'low'})"), True, "unclosed string or comment"),
         # --- 2026-10-13 evening effort
         ("Agent without effort → deny (inherits the session effort)",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus"}}, True, "no effort"),
         ("Agent effort value outside the allow list → deny",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "ultra"}}, True, "allow list"),
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "ultra"}}, True, "effort 'ultra' is not in the allow list"),
         ("Agent effort max without mark → deny (cap xhigh)",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "max"}}, True, "above the cap"),
         ("Agent effort max with mark → pass",

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """memory-lint: mechanical check of memory directories (links, wikilinks, frontmatter, public IPs, secret assignments, style, router size).
 Usage: python3 ~/.claude/scripts/memory-lint.py <memory dir>... [--days N] [--allow-ip 8.8.8.8] [--archive]
-  --style       print style counts (em dash etc.) (off by default)
+  --style       print style counts (em/en dash etc.) (off by default)
   --days N      style and frontmatter checks cover only files modified in the last N days (default 2). Links, IPs, secrets are always checked in full
   --allow-ip P  public IPs or CIDRs to allow (comma separated, e.g. public service VIPs)
   --archive     also scan archive/ for IPs and secrets (default is live files only)
@@ -13,7 +13,7 @@ ap.add_argument('dirs', nargs='+')
 ap.add_argument('--days', type=int, default=2)
 ap.add_argument('--allow-ip', default='8.8.8.8,8.8.4.4', help='exact IPs or CIDRs (comma separated). Prefix exemptions are not accepted')
 ap.add_argument('--archive', action='store_true')
-ap.add_argument('--style', action='store_true', help='also print em dash, middle dot, and corner bracket counts (off by default because old files are exempt)')
+ap.add_argument('--style', action='store_true', help='also print em/en dash, middle dot, and corner bracket counts (off by default because old files are exempt)')
 ap.add_argument('--desc-dates', action='store_true', help='DESC-STALE when the latest date in description is older than the latest date in the body (warning only)')
 a = ap.parse_args()
 import ipaddress
@@ -80,7 +80,7 @@ for d in DIRS:
                 mt = time.localtime(os.path.getmtime(f)); mtd = (mt.tm_mon, mt.tm_mday)
                 dd, bd = _dates(dm.group(1)), [x for x in _dates('\n'.join(l for l in t[m.end():].split('\n') if not l.lstrip().startswith('>'))) if x <= mtd]
                 if dd and bd and max(bd) > max(dd): print(f'  DESC-STALE {os.path.basename(f)} description latest {max(dd)[0]}/{max(dd)[1]} < body latest {max(bd)[0]}/{max(bd)[1]}')
-        c = {'em-dash': t.count('—') + t.count('–'), 'middle-dot': t.count('·'), 'corner-bracket': t.count('「') + t.count('」')}
+        c = {'dash': t.count('—') + t.count('–'), 'middle-dot': t.count('·'), 'corner-bracket': t.count('「') + t.count('」')}
         c = {k: v for k, v in c.items() if v}
         if c and a.style: print(f'  STYLE {os.path.basename(f)} {c}')
     # 3. public IPs, secrets (all live files + archive when asked)
