@@ -3,26 +3,26 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "claude-beacon"
+name = "lapbar"
 version = "0.1.0"
 description = "Claude Code harness installer and cost-savings report: force cheap hands under an expensive head"
 readme = "README.md"
-license = "PolyForm-Noncommercial-1.0.0"
+license = "MIT"
 requires-python = ">=3.11"
 authors = [{ name = "rok_root" }]
 keywords = ["claude-code", "hooks", "cost", "subagent", "harness"]
 classifiers = [
   "Programming Language :: Python :: 3",
-    "Operating System :: OS Independent",
+  "Operating System :: OS Independent",
 ]
 dependencies = []
 
 [project.scripts]
-beacon = "beacon.cli:main"
+lapbar = "lapbar.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/mysoul7306/beacon"
+Homepage = "https://github.com/mysoul7306/lapbar"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/beacon"]
+packages = ["src/lapbar"]
 exclude = ["**/scrub_map*"]

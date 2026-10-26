@@ -1,4 +1,4 @@
-"""Timestamped, owner-only backups taken before beacon overwrites anything."""
+"""Timestamped, owner-only backups taken before lapbar overwrites anything."""
 from __future__ import annotations
 
 import os
@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-# Files beacon touches (settings.json above all) may carry tokens: backups are
+# Files lapbar touches (settings.json above all) may carry tokens: backups are
 # owner-only, or narrower when the original already is.
 BACKUP_MODE = 0o600
 

@@ -1,4 +1,4 @@
-"""`beacon doctor`: verify assets exist, hooks are wired and hook self-tests pass."""
+"""`lapbar doctor`: verify assets exist, hooks are wired and hook self-tests pass."""
 from __future__ import annotations
 
 import argparse
@@ -7,10 +7,10 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from beacon import assets as asset_mod
-from beacon import settings_wiring as wiring
-from beacon.assets import Asset, AssetRoot
-from beacon.tables import format_table
+from lapbar import assets as asset_mod
+from lapbar import settings_wiring as wiring
+from lapbar.assets import Asset, AssetRoot
+from lapbar.tables import format_table
 
 DEFAULT_TARGET = "~/.claude"
 HEADERS = ("check", "item", "result", "detail")
@@ -38,7 +38,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
 def run(args: argparse.Namespace) -> int:
     target = Path(args.target).expanduser().resolve()
     checks = diagnose(target)
-    print(f"beacon doctor -> {target}")
+    print(f"lapbar doctor -> {target}")
     print(format_table(HEADERS, [(c.kind, c.item, c.result, c.detail) for c in checks]))
     failed = sum(c.result == FAIL for c in checks)
     print(f"{len(checks) - failed} passed, {failed} failed")

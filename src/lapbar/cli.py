@@ -4,15 +4,15 @@ from __future__ import annotations
 import argparse
 import sys
 
-from beacon import __version__
-from beacon import bundle, doctor, install, report
+from lapbar import __version__
+from lapbar import bundle, doctor, install, report
 
 COMMANDS = (install, doctor, report, bundle)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="beacon", description="Claude Code harness installer and cost-savings report.")
-    parser.add_argument("--version", action="version", version=f"beacon {__version__}")
+    parser = argparse.ArgumentParser(prog="lapbar", description="Claude Code harness installer and cost-savings report.")
+    parser.add_argument("--version", action="version", version=f"lapbar {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for module in COMMANDS:
         module.add_parser(subparsers)

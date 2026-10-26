@@ -10,9 +10,9 @@ from unittest import mock
 
 from install_fixtures import FAKE_FILES, list_files, make_assets
 
-from beacon import assets as asset_mod
-from beacon import install as inst
-from beacon import settings_wiring as wiring
+from lapbar import assets as asset_mod
+from lapbar import install as inst
+from lapbar import settings_wiring as wiring
 
 
 class InstallTestCase(unittest.TestCase):

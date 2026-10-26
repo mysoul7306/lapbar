@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from beacon.backups import write_backup
+from lapbar.backups import write_backup
 
 SETTINGS_NAME = "settings.json"
 # settings.json may carry env tokens: a newly created file is owner-only.

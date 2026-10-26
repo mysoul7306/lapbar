@@ -99,7 +99,7 @@ def _validated_models(raw_models: Mapping[str, object], origin: str) -> dict[str
 
 
 def _read_packaged() -> dict:
-    return json.loads(resources.files("beacon").joinpath("prices.json").read_text(encoding="utf-8"))
+    return json.loads(resources.files("lapbar").joinpath("prices.json").read_text(encoding="utf-8"))
 
 
 def load_prices(override_path: str | None = None) -> PriceTable:

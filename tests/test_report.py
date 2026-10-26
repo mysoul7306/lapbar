@@ -1,4 +1,4 @@
-"""Tests for `beacon report`: scanning, dedupe, classification, counterfactual, filters, pricing."""
+"""Tests for `lapbar report`: scanning, dedupe, classification, counterfactual, filters, pricing."""
 from __future__ import annotations
 
 import argparse
@@ -16,8 +16,8 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from beacon import report  # noqa: E402
-from beacon.pricing import cost_usd, load_prices, normalize_model_id  # noqa: E402
+from lapbar import report  # noqa: E402
+from lapbar.pricing import cost_usd, load_prices, normalize_model_id  # noqa: E402
 
 FABLE = "claude-fable-5-1"
 OPUS = "claude-opus-5-5"
