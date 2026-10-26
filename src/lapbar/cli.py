@@ -5,9 +5,9 @@ import argparse
 import sys
 
 from lapbar import __version__
-from lapbar import bundle, doctor, install, report
+from lapbar import bundle, doctor, install, report, session
 
-COMMANDS = (install, doctor, report, bundle)
+COMMANDS = (install, doctor, report, session, bundle)
 
 
 def build_parser() -> argparse.ArgumentParser:
