@@ -95,11 +95,11 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 4. 가끔 `lapbar report` 로 숫자를, `lapbar session` 으로 한 세션을 본다
 5. 계획 중 "이거 전에 있었나?" 는 `scout-git` 에이전트에 맡긴다. git 이 읽기 전용이라 안전하다
 
-규칙 파일은 한국어다 (이 하네스를 쓴 사람의 작업 언어). 필요하면 복사해서 고쳐 쓰면 된다 - 그래서 `install` 이 덮어쓰기를 하지 않는다.
+hook 메시지는 영어다. 규칙 파일과 `/lane`, `/review-lane` 절차는 한국어 (이 하네스를 쓴 사람의 작업 언어). 필요하면 복사해서 고쳐 쓰면 된다 - 그래서 `install` 이 덮어쓰기를 하지 않는다.
 
 ## 공개본에서 뺀 것
 
-이 저장소의 hook, rules 는 한 사람의 라이브 `~/.claude` 에서 **`lapbar bundle`** 로 추출한 것이다. 치환 표 (`scrub_map.json`) 는 원문을 담고 있어 저장소 밖 (`$LAPBAR_SCRUB_MAP`) 에만 있고, 공개 코드에는 digest 로만 들어 있다. 추출 때 호칭, 실명, 계정, 홈 경로, 프로젝트와 회사 이름, 벤더, wrapper 이름, IP, 토큰 패턴을 치환하거나 뺐다. `lapbar bundle --check` 가 게이트인데, CI 에서는 범용 패턴 (홈 경로, IP, JWT, 자격증명 대입, 메모리 파일 이름) 만 보고, 고유명사 (digest 로만 보관) 와 호칭은 관리자 로컬에서 `--require-map` 으로 확인한다. 외부 접근 기록 hook (trust-ledger) 은 회사 wrapper 표와 결합이 커서 다음 판에 넣는다.
+이 저장소의 rules, 레인 절차, `review-readonly` 에이전트는 한 사람의 라이브 `~/.claude` 에서 **`lapbar bundle`** 로 추출한 것이고, hook 과 `scout-git` 에이전트는 여기서 직접 쓴다 (manifest 의 `keep` 표지, `bundle` 이 덮지 않는다). 치환 표 (`scrub_map.json`) 는 원문을 담고 있어 저장소 밖 (`$LAPBAR_SCRUB_MAP`) 에만 있고, 공개 코드에는 digest 로만 들어 있다. 추출 때 호칭, 실명, 계정, 홈 경로, 프로젝트와 회사 이름, 벤더, wrapper 이름, IP, 토큰 패턴을 치환하거나 뺐다. `lapbar bundle --check` 가 게이트인데, CI 에서는 범용 패턴 (홈 경로, IP, JWT, 자격증명 대입, 메모리 파일 이름) 만 보고, 고유명사 (digest 로만 보관) 와 호칭은 관리자 로컬에서 `--require-map` 으로 확인한다. 외부 접근 기록 hook (trust-ledger) 은 회사 wrapper 표와 결합이 커서 다음 판에 넣는다.
 
 ## 개발
 

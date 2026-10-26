@@ -95,11 +95,11 @@ Assumes a Claude Code where the `Agent` tool has an `effort` parameter and the `
 4. Occasionally look at the numbers with `lapbar report`, and at one session with `lapbar session`.
 5. For "was this ever here before?" questions during planning, hand the question to the `scout-git` agent; its git is read-only.
 
-The rule files are in Korean (the working language of the person who uses this harness). Copy and edit them as you like - that is why `install` never overwrites.
+Hook messages are English. The rule files and the `/lane`, `/review-lane` procedures are in Korean (the working language of the person who uses this harness). Copy and edit them as you like - that is why `install` never overwrites.
 
 ## What was removed from the public release
 
-The hooks and rules in this repo were extracted from one person's live `~/.claude` with **`lapbar bundle`**. The substitution table (`scrub_map.json`) holds the originals, so it lives only outside the repo (`$LAPBAR_SCRUB_MAP`) and the public code carries only digests. The extraction substituted or dropped terms of address, real names, accounts, home paths, project and company names, vendors, wrapper names, IPs and token patterns. `lapbar bundle --check` is the gate: in CI it looks only at generic patterns (home paths, IPs, JWTs, credential assignments, memory file names), while proper nouns (kept as digests) and terms of address are checked locally by the maintainer with `--require-map`. The external-access ledger hook (trust-ledger) is tightly coupled to a company wrapper table, so it is coming in a later release.
+The rules, lane procedures and the `review-readonly` agent in this repo were extracted from one person's live `~/.claude` with **`lapbar bundle`**; the hooks and the `scout-git` agent are authored here (marked `keep` in the manifest, so `bundle` never overwrites them). The substitution table (`scrub_map.json`) holds the originals, so it lives only outside the repo (`$LAPBAR_SCRUB_MAP`) and the public code carries only digests. The extraction substituted or dropped terms of address, real names, accounts, home paths, project and company names, vendors, wrapper names, IPs and token patterns. `lapbar bundle --check` is the gate: in CI it looks only at generic patterns (home paths, IPs, JWTs, credential assignments, memory file names), while proper nouns (kept as digests) and terms of address are checked locally by the maintainer with `--require-map`. The external-access ledger hook (trust-ledger) is tightly coupled to a company wrapper table, so it is coming in a later release.
 
 ## Development
 
