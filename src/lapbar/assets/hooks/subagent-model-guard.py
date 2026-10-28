@@ -35,7 +35,7 @@ Check rules:
      code), a backslash in code position (a regex body with
      escaped slashes would open a comment; an identifier escape renames a key), a newline inside a quoted string (a JS syntax
      error; the same hiding trick across lines), a unicode line separator (U+2028 / U+2029) anywhere and an HTML-style
-     comment (`<!--`, line-leading `-->`) in code position (JS treats them as line ends and comments, the hook would not),
+     comment (`<!--`, `-->`) in code position (JS treats them as line ends and comments, the hook would not),
      an unclosed string or comment, an unreadable scriptPath, and internal hook exceptions are all denied. A call by saved workflow name looks up `~/.claude/workflows/<name>.js`
      and `<cwd>/.claude/workflows/<name>.js` and checks it; if neither exists (built in) it passes.
   8. deny text = reason + where to fix + one short GUIDE line. Detailed rules live in rules/subagent-review.md.

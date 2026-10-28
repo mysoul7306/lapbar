@@ -33,12 +33,12 @@ lapbar session                    # one session: hook injection, rules loaded, s
 
 Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 것** 이다. 파일 훑기, 리뷰 렌즈, 수집 같은 서브에이전트 작업은 더 싼 모델로도 품질이 같은데, `Agent` / `Workflow` 호출에 model 을 안 적으면 머리 모델을 그대로 상속한다. 그래서 hook 으로 막았다.
 
-- **model, effort 는 리터럴로** - `subagent-model-guard.py` 가 `Agent`, `Task`, `Workflow` 호출에서 model 생략, 변수, 삼항식을 거부하고 (deny), 최상위 모델 (fable) 과 최하위 모델 (haiku, 품질 사고 전례로 기본 차단) 은 그 호출 안에 `[owner-approved: <모델>]` 표지가 있을 때만 허용한다. effort 도 같은 규칙 (low / medium / high / xhigh 리터럴). 허용 모델 이름은 hook 의 `TIERS` 표 하나에서 바꾼다. **haiku 역할 모드** (`settings.json` `env` 의 `SUBAGENT_HAIKU_ROLE_MODE=role`) 를 켜면 그 호출에 `[haiku role: <기계적 일>]` 표지와 `[verify: <부모가 돌릴 검증>]` 표지가 있고 effort 가 medium / high 면 haiku 도 통과한다 - 부모가 기계적으로 검증하는 일 (테스트 XML 집계, lint 큐 정리, grep 요약) 용이다. `SUBAGENT_GUARD_OWNER` 는 표지에 이름을 넣는다 (`[alice-approved: fable]`) - 누가 허용했는지가 표지에 남는다. 이 값을 바꾸면 설치된 `rules/subagent-review.md`, `commands/lane.md`, `commands/review-lane.md` 의 `owner-approved` 도 같은 이름으로 고쳐야 한다 - 안 그러면 규칙이 hook 이 더는 받지 않는 표지를 쓰라고 안내한다.
+- **model, effort 는 리터럴로** - `subagent-model-guard.py` 가 `Agent`, `Task`, `Workflow` 호출에서 model, effort 의 생략, 변수, 삼항식을 거부한다 (deny). 최상위 모델 (fable) 과 최하위 모델 (haiku, 품질 사고 전례로 기본 차단) 은 그 호출 안에 허용 표지가 있을 때만, haiku 는 역할 모드에서 역할 표지 + 검증 표지로도 통과한다. 표지, 설정, Workflow 스크립트에서 거부되는 꼴은 [model guard 자세히](#model-guard-자세히) 에.
 - **레인 루프** - `/lane` (머리는 해독, 분해, 종합만; read 는 opus high, collect 는 sonnet low, refute 는 opus xhigh) 과 `/review-lane` (렌즈 3 → 반박자 2, agent 상한 10) 이 그 배분을 절차로 굳힌다.
 - **보호 브랜치 push 차단** - `git-push-guard.py` 가 develop / main / master 로 가는 push 를 refspec, upstream 까지 풀어 판정하고 못 풀면 fail-closed 로 막는다. 머지는 AI 가, push 는 사람이.
 - **메모리 위생** - `memory-lint-hook.py` 가 세션 시작 때 메모리 디렉토리의 깨진 링크, 공인 IP, 비밀값, 라우터 크기를 점검한다.
 
-두 가드는 **정규식 기반** 이다 - AI 가 실수로 push 하거나 model 을 빠뜨리는 걸 막는 안전장치이지, 작정한 우회 (eval, 설정 주입, 셸 트릭) 를 전부 막는 샌드박스가 아니다. 알려진 우회 꼴은 self-test 케이스로 하나씩 닫고 있고 (push 60, model 142), AST 파서 전환은 다음 판 과제. 그래서 `Workflow` 스크립트에선 JS 가 정규식으로 읽는 자리 (연산자, 여는 괄호, 키워드, if / while / for / with 헤더의 `)` 뒤) 의 정규식 리터럴 (`/…/`) 과 문자열, 주석 밖의 백슬래시가 거부된다 (식별자, 숫자, `]`, 그 밖의 `)` 뒤 나눗셈은 괜찮다) - 따옴표, 이스케이프된 슬래시, 주석 기호가 든 정규식은 `agent()` 호출을 숨길 수 있어서다. 대신 `new RegExp('…')` 를 쓴다. hook 이 문맥을 잘못 읽는 경우의 안전망으로, 나눗셈 뒤 같은 줄 다음 `/` 까지 짝 없는 따옴표가 있거나 (`n / 2; const u = 'a/b'`) 그 `/` 가 글자에 붙은 주석 시작이면 (`x/2//c`) 역시 거부한다 - 줄을 나누거나 띄어 쓴다.
+두 가드는 **정규식 기반** 이다 - AI 가 실수로 push 하거나 model 을 빠뜨리는 걸 막는 안전장치이지, 작정한 우회 (eval, 설정 주입, 셸 트릭) 를 전부 막는 샌드박스가 아니다. 알려진 우회 꼴은 self-test 케이스로 하나씩 닫고 있고 (push 60, model 142), AST 파서 전환은 다음 판 과제. 그래서 `Workflow` 스크립트에 쓰면 안 되는 것은 [Workflow 스크립트에 쓰면 안 되는 것](#workflow-스크립트에-쓰면-안-되는-것) 에 모아 두었다.
 
 ## 얼마나 아끼나
 
@@ -90,12 +90,54 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 전제: `Agent` 툴에 `effort` 파라미터가 있고 `Workflow` 툴이 있는 Claude Code (2026-10 기준 최신). 없는 판에서는 model 가드만 쓰고 `/lane`, `/review-lane` 은 건너뛴다.
 
 1. `lapbar install` → Claude Code 재시작
-2. 서브에이전트를 부를 때 model 과 effort 를 적는다. 안 적으면 hook 이 막고 이유를 보여 준다
+2. 서브에이전트를 부를 때 model 과 effort 를 적는다 (fable, haiku 는 표지도 필요하다, 아래 참조). 안 적으면 hook 이 막고 이유를 보여 준다
 3. 리뷰는 `/review-lane`, 긴 작업은 `/lane` 으로
 4. 가끔 `lapbar report` 로 숫자를, `lapbar session` 으로 한 세션을 본다
 5. 계획 중 "이거 전에 있었나?" 는 `scout-git` 에이전트에 맡긴다. git 이 읽기 전용이라 안전하다
 
-`settings.json` 의 `env` 키 세 개가 model guard 를 조절한다 (`lapbar install` 은 env 를 쓰지 않는다. Claude Code 는 `env` 블록을 hook 에 넘기지만 터미널 셸에는 안 실린다):
+가드가 무엇을 보는지, 표지, `settings.json` 의 선택 `env` 키 (effort 상한, haiku 역할 모드, 소유자 이름) 는 [model guard 자세히](#model-guard-자세히) 에 있다.
+
+hook 메시지는 영어다. 규칙 파일과 `/lane`, `/review-lane` 절차는 한국어 (이 하네스를 쓴 사람의 작업 언어). 필요하면 복사해서 고쳐 쓰면 된다 - 그래서 `install` 이 덮어쓰기를 하지 않는다.
+
+## model guard 자세히
+
+`subagent-model-guard.py` 는 `Agent`, `Task`, `Workflow` 호출마다 먼저 돈다. 호출을 정적으로 읽어 (`Agent` 입력, 또는 Workflow 스크립트 본문) 통과시키거나, 무엇을 고치면 되는지 적은 사유와 함께 거부한다 (deny). 호출을 고쳐 주지는 않는다.
+
+### 호출에 있어야 하는 것
+
+| 항목 | 규칙 |
+|---|---|
+| `model` | 티어 이름 하나를 적은 문자열 리터럴. `opus`, `sonnet` 은 그대로 통과, `fable`, `haiku` 는 표지가 필요하다 (다음 표). `claude-opus-5-5` 같은 전체 ID 는 티어로 환산한다. `inherit`, 변수, 삼항식, 괄호식, 티어 낱말이 둘인 이름 (`opus-haiku`) 은 거부. 허용 티어는 hook 의 `TIERS` 표 하나에 있다 |
+| `effort` | 소문자 리터럴 하나: `low`, `medium`, `high`, `xhigh`, `max`. `SUBAGENT_EFFORT_CAP` 위 단계는 표지가 필요하다 (기본 상한이면 `max` 가 그렇다). 생략하면 세션 effort 를 상속하므로 거부 |
+| Workflow `agent()` opts | 평평한 객체 리터럴 하나. 삼항식으로 고른 객체, spread, 계산 키, getter / setter, 식별자 이스케이프, shorthand (`{effort}`) 는 거부. 키는 `{` 나 `,` 바로 뒤에서만 키로 세므로 `label: c ? model : 'x'` 의 `model :` 은 키가 아니다. 같은 키가 반복되면 JS 처럼 마지막 것 |
+| fable 개수 | 표지가 있어도 Workflow 스크립트 하나에 fable `agent()` 호출 위치 2곳까지 |
+
+### 표지
+
+표지는 같은 호출 안의 평문이다: `Agent` / `Task` 는 `prompt`, Workflow `agent()` 는 괄호 안 어디든 (label, prompt, 주석도). hook 은 소유자가 정말 허용했는지 알 수 없다 - 허용 없이 표지를 적는 건 규칙 위반이지 hook 이 잡는 게 아니다.
+
+| 표지 | 통과시키는 것 |
+|---|---|
+| `[owner-approved: fable]` | fable (2곳 상한 안에서) |
+| `[owner-approved: haiku]` | haiku, 상한까지의 effort 로 (상한 위는 effort 표지가 따로 필요하다) |
+| `[owner-approved: max]` (다른 단계도 같은 꼴) | 상한 위의 그 effort 단계 |
+| `[haiku role: <기계적 일>]` **과** `[verify: <부모가 돌릴 검증>]` | 역할 모드가 켜져 있을 때 (다음 표) haiku 를 effort `medium` 또는 `high` 로. `low`, `xhigh`, `max` 는 거부 |
+
+역할 모드는 부모가 기계적으로 검증하는 일 (테스트 결과 집계, lint 큐 정리, grep 요약, 체크섬 대조) 을 위한 것이다. 역할 범위는 medium 에서 high 까지: 그보다 생각이 필요한 일은 haiku 일이 아니다.
+
+표지 안의 이름은 기본 `owner`, `SUBAGENT_GUARD_OWNER` 로 바꾼다 (`[alice-approved: fable]`).
+
+### 설정 (`settings.json` 의 `env` 블록)
+
+`lapbar install` 은 이 값을 쓰지 않는다. Claude Code 는 `settings.json` 의 `env` 블록을 hook 에 넘기지만 터미널 셸에는 안 실리므로, hook 의 `--self-test` 는 자기가 설치된 Claude 홈의 `settings.json` 에서 읽은 값을 찍어 준다 (폴백 전 원값 그대로).
+
+| 키 | 기본값 | 효과 |
+|---|---|---|
+| `SUBAGENT_EFFORT_CAP` | `xhigh` | 표지 없이 허용되는 effort 상한: `low`, `medium`, `high`, `xhigh`, `max` 중 하나. 다른 값은 `xhigh` 로 돌아간다 |
+| `SUBAGENT_HAIKU_ROLE_MODE` | off | `role` 이면 haiku 역할 표지가 켜진다, 다른 값은 off |
+| `SUBAGENT_GUARD_OWNER` | `owner` | 허용 표지 안의 이름. `<자리표시자>` 그대로면 미설정 취급 |
+
+소유자 이름을 바꾸면 설치된 규칙, 절차 파일의 `owner-approved` 도 같은 이름으로 고친다 (`rules/subagent-review.md`, `commands/lane.md`, `commands/review-lane.md`, `scripts/lane-workflow.js`. `grep -rl owner-approved ~/.claude` 로 전부 찾는다). 안 그러면 규칙이 hook 이 더는 받지 않는 표지를 쓰라고 안내한다.
 
 ```
 "env": {
@@ -105,9 +147,23 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 }
 ```
 
-`SUBAGENT_EFFORT_CAP` 은 표지 없이 허용되는 effort 상한 (기본 `xhigh`), `SUBAGENT_HAIKU_ROLE_MODE=role` 은 haiku 역할 모드 (기본 off), `SUBAGENT_GUARD_OWNER` 는 허용 표지 안의 이름 (기본 `owner`, 그래서 기본 표지가 `[owner-approved: fable]`). hook 의 `--self-test` 가 끝에 `settings.json` 에서 읽은 세 값을 찍어 준다.
+### Workflow 스크립트에 쓰면 안 되는 것
 
-hook 메시지는 영어다. 규칙 파일과 `/lane`, `/review-lane` 절차는 한국어 (이 하네스를 쓴 사람의 작업 언어). 필요하면 복사해서 고쳐 쓰면 된다 - 그래서 `install` 이 덮어쓰기를 하지 않는다.
+hook 은 `agent()` 호출을 찾으려고 작은 상태 기계로 문자열과 주석을 지운다. JS 파서가 아니라서, 엉뚱한 자리에서 문자열이나 주석 상태를 열어 `agent()` 호출을 숨길 수 있는 꼴 몇 가지는 아예 거부한다. deny 사유마다 그 꼴과 고칠 방법이 적혀 있다.
+
+| 거부하는 것 | 왜 | 대신 |
+|---|---|---|
+| JS 가 정규식으로 읽는 자리의 정규식 리터럴 `/…/`: 스크립트 맨 앞, 연산자나 `( [ { } , ; :` 뒤, spread 뒤, `return` 같은 키워드 뒤, `if` / `while` / `for` / `with` 헤더의 `)` 뒤 | 정규식 안의 따옴표나 주석 기호가 뒤 텍스트와 짝을 지어 그 사이가 통째로 지워진다 | `new RegExp('…')` |
+| 나눗셈 뒤 같은 줄에 짝 없는 따옴표와 또 다른 `/` (`n / 2; const u = 'a/b'`), 또는 글자에 붙은 주석 (`x/2//c`) | 잘못 읽힌 정규식과 같은 모양이라, hook 이 문맥을 못 가르는 경우의 안전망 | 줄을 나누거나 주석 앞에 공백 |
+| 문자열, 주석 밖의 백슬래시 | 이스케이프된 슬래시가 든 정규식 본문이거나 `\u006dodel` 같은 식별자 이스케이프 | `new RegExp('…')`, 평범한 식별자 |
+| `'` / `"` 문자열 안의 이스케이프되지 않은 개행이나 CR (`\` 줄 이어 쓰기는 괜찮다), 어디든 U+2028 / U+2029, 코드 자리의 `<!--` 나 `-->` | JS 는 줄 끝이나 주석으로 보는데 hook 은 그러지 않는다 | 여러 줄 텍스트는 템플릿 리터럴, 구분자는 제거 |
+| 직접 호출이 아닌 `agent` (별칭, 인자, 속성), `eval` / `Function` / `globalThis` 경유 | 호출 지점을 셀 수 없다 | `agent(...)` 를 직접 호출 |
+
+식별자, 숫자, `]`, 헤더가 아닌 `)` 뒤의 나눗셈은 나눗셈으로 읽는다: `Math.round(budget.remaining()/1000)`, `done / total + '%' // progress`, `a / b + ' of ' + c / d` 는 통과한다.
+
+### 점검
+
+`python3 ~/.claude/hooks/subagent-model-guard.py --self-test` 가 회귀 케이스 142개를 돌리고 읽은 env 값을 찍는다. `lapbar doctor` 는 설치된 사본으로 그 self-test 와 프로브 3개 (model 없음, 정상 호출, 표지 없는 haiku) 를 돈다. 지금까지 찾아 닫은 숨기기 꼴은 `CHANGELOG.md` 에 있다.
 
 ## 공개본에서 뺀 것
 

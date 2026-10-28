@@ -33,12 +33,12 @@ lapbar session                      # one session: hook injection, rules loaded,
 
 The most expensive thing in Claude Code is the head model doing the legwork. Subagent work - scanning files, review lenses, collection - is just as good on a cheaper model, but an `Agent` / `Workflow` call that doesn't name a model inherits the head model. So hooks block that.
 
-- **model and effort must be literals** - `subagent-model-guard.py` denies a missing model, a variable, or a ternary in `Agent` / `Task` / `Workflow` calls. The top tier (fable) and the bottom tier (haiku, blocked by default after quality incidents) are allowed only with an `[owner-approved: <model>]` tag inside that same call. Effort follows the same rule (low / medium / high / xhigh literals). Allowed model names live in the hook's single `TIERS` table. With **haiku role mode** (`SUBAGENT_HAIKU_ROLE_MODE=role` in the `env` block of `settings.json`), haiku also passes when the call carries a `[haiku role: <mechanical job>]` tag and a `[verify: <check the parent will run>]` tag and its effort is medium or high - for work the parent verifies mechanically (test XML aggregation, lint queue cleanup, grep summaries). `SUBAGENT_GUARD_OWNER` puts a name into the tags (`[alice-approved: fable]`), so an approval names a person; if you set it, replace `owner-approved` in the installed `rules/subagent-review.md`, `commands/lane.md` and `commands/review-lane.md` with the same name, or the rules will tell the model to write a tag the hook no longer accepts.
+- **model and effort must be literals** - `subagent-model-guard.py` denies an `Agent` / `Task` / `Workflow` call whose model or effort is missing, a variable or a ternary. The top tier (fable) and the bottom tier (haiku, blocked by default after quality incidents) pass only with an approval tag inside that same call, or haiku in role mode with a role tag and a verify tag. Tags, settings and the constructs refused in Workflow scripts: [The model guard in detail](#the-model-guard-in-detail).
 - **lane loop** - `/lane` (the head only decodes, decomposes and synthesizes; read is opus high, collect is sonnet low, refute is opus xhigh) and `/review-lane` (3 lenses → 2 refuters, agent cap 10) turn that split into a procedure.
 - **protected-branch push block** - `git-push-guard.py` denies pushes to develop / main / master, resolving refspec and upstream to decide, and failing closed when it can't. Merges by the AI, pushes by a human.
 - **memory hygiene** - `memory-lint-hook.py` checks the memory directory for broken links, public IPs, secrets and router size at session start.
 
-Both guards are **regex-based**: a safety net against the AI accidentally pushing or forgetting a model, not a sandbox against deliberate evasion (eval, config injection, shell tricks). Known evasion shapes are closed one by one as self-test cases (push 60, model 142); an AST-parser rewrite is the next milestone. One consequence for `Workflow` scripts: regex literals (`/…/`) are denied wherever JS would read one (after an operator, an opening bracket, a keyword, or the `)` of an if / while / for / with header - division after identifiers, numbers, `]` and other `)` is fine), as is any backslash outside strings and comments - a regex with a quote, an escaped slash or a comment opener inside can hide an `agent()` call. Use `new RegExp('…')` instead. As a safety net for contexts the hook misreads, a division is also refused when the text up to the next `/` on the same line has an unpaired quote (`n / 2; const u = 'a/b'`) or when that `/` starts a comment glued to a word (`x/2//c`) - split the line or add a space.
+Both guards are **regex-based**: a safety net against the AI accidentally pushing or forgetting a model, not a sandbox against deliberate evasion (eval, config injection, shell tricks). Known evasion shapes are closed one by one as self-test cases (push 60, model 142); an AST-parser rewrite is the next milestone. What that means for `Workflow` scripts is listed in [What a Workflow script may not contain](#what-a-workflow-script-may-not-contain).
 
 ## How much it saves
 
@@ -90,12 +90,54 @@ Measured by the person who built this harness (10 days since turning the hooks o
 Assumes a Claude Code where the `Agent` tool has an `effort` parameter and the `Workflow` tool exists (latest as of 2026-10). Without those, use only the model guard and skip `/lane` and `/review-lane`.
 
 1. `lapbar install` → restart Claude Code
-2. When you call a subagent, name the model and effort. If you don't, the hook blocks it and shows why.
+2. When you call a subagent, name the model and effort (fable and haiku also need a tag, see below). If you don't, the hook blocks it and shows why.
 3. Review with `/review-lane`, long tasks with `/lane`.
 4. Occasionally look at the numbers with `lapbar report`, and at one session with `lapbar session`.
 5. For "was this ever here before?" questions during planning, hand the question to the `scout-git` agent; its git is read-only.
 
-Three optional `env` keys in `settings.json` tune the model guard (`lapbar install` does not write them; Claude Code passes the `env` block to hooks, a terminal shell does not):
+What the guard checks, the tags, and the optional `settings.json` `env` keys (effort cap, haiku role mode, owner name) are in [The model guard in detail](#the-model-guard-in-detail).
+
+Hook messages are English. The rule files and the `/lane`, `/review-lane` procedures are in Korean (the working language of the person who uses this harness). Copy and edit them as you like - that is why `install` never overwrites.
+
+## The model guard in detail
+
+`subagent-model-guard.py` runs before every `Agent`, `Task` and `Workflow` call. It reads the call statically (the `Agent` input, or the text of the Workflow script) and either lets it through or denies it with a reason that names what to change. It never edits the call.
+
+### What must be in the call
+
+| Field | Rule |
+|---|---|
+| `model` | one string literal naming a tier. `opus` and `sonnet` pass as they are; `fable` and `haiku` need a tag (next table). Full IDs such as `claude-opus-5-5` are mapped to their tier. `inherit`, variables, ternaries, parenthesized expressions and names with two tier words (`opus-haiku`) are denied. Allowed tiers live in the hook's single `TIERS` table |
+| `effort` | one lowercase literal: `low`, `medium`, `high`, `xhigh`, `max`. Anything above `SUBAGENT_EFFORT_CAP` needs a tag (with the default cap, that is `max`). An omitted effort would inherit the session effort, so it is denied |
+| Workflow `agent()` opts | one flat object literal. An object chosen by a ternary, spread, computed keys, getters / setters, identifier escapes and shorthand (`{effort}`) are denied. A key counts only right after `{` or `,`, so `label: c ? model : 'x'` is not a `model` key. If a key repeats, the last one wins, as in JS |
+| fable count | at most 2 fable `agent()` call sites per Workflow script, even with tags |
+
+### Tags
+
+A tag is plain text inside the same call: the `prompt` of an `Agent` / `Task`, or anywhere inside the parentheses of a Workflow `agent()` (label, prompt, even a comment). The hook cannot know whether the owner really approved; writing a tag without approval is a rule violation, not something it detects.
+
+| Tag | Lets through |
+|---|---|
+| `[owner-approved: fable]` | fable (up to the 2-site cap) |
+| `[owner-approved: haiku]` | haiku at any effort up to the cap (above the cap the effort tag is still needed) |
+| `[owner-approved: max]` (or another level) | that effort level above the cap |
+| `[haiku role: <mechanical job>]` **and** `[verify: <check the parent will run>]` | haiku at effort `medium` or `high`, only while role mode is on (next table). `low`, `xhigh` and `max` are denied |
+
+Role mode is meant for work the parent verifies mechanically: test-result aggregation, lint queue cleanup, grep summaries, checksum comparison. The role range is medium to high: a job that needs more thinking than that is not a haiku job.
+
+`owner` is the default name in the tags; `SUBAGENT_GUARD_OWNER` replaces it (`[alice-approved: fable]`).
+
+### Settings (`env` block of `settings.json`)
+
+`lapbar install` does not write these. Claude Code passes the `env` block of `settings.json` to hooks; a terminal shell does not, so the hook's `--self-test` prints the values it finds in the `settings.json` of the Claude home it is installed in (the raw values, before any fallback).
+
+| Key | Default | Effect |
+|---|---|---|
+| `SUBAGENT_EFFORT_CAP` | `xhigh` | highest effort allowed without a tag: one of `low`, `medium`, `high`, `xhigh`, `max`. Any other value falls back to `xhigh` |
+| `SUBAGENT_HAIKU_ROLE_MODE` | off | `role` turns on the haiku role tags; any other value is off |
+| `SUBAGENT_GUARD_OWNER` | `owner` | name inside the approval tags. A value left as a `<placeholder>` counts as unset |
+
+If you set the owner name, replace `owner-approved` with the same name in the installed rules and procedures too (`rules/subagent-review.md`, `commands/lane.md`, `commands/review-lane.md`, `scripts/lane-workflow.js`; `grep -rl owner-approved ~/.claude` finds them all). Otherwise the rules tell the model to write a tag the hook no longer accepts.
 
 ```
 "env": {
@@ -105,9 +147,23 @@ Three optional `env` keys in `settings.json` tune the model guard (`lapbar insta
 }
 ```
 
-`SUBAGENT_EFFORT_CAP` is the highest effort allowed without a tag (default `xhigh`). `SUBAGENT_HAIKU_ROLE_MODE=role` turns on haiku role mode (default off). `SUBAGENT_GUARD_OWNER` is the name inside the approval tags (default `owner`, so the default tag is `[owner-approved: fable]`). The hook's `--self-test` prints the three values it finds in `settings.json` at the end.
+### What a Workflow script may not contain
 
-Hook messages are English. The rule files and the `/lane`, `/review-lane` procedures are in Korean (the working language of the person who uses this harness). Copy and edit them as you like - that is why `install` never overwrites.
+To find `agent()` calls the hook blanks strings and comments with a small state machine. It is not a JS parser, so a few constructs are refused outright because they could open a string or comment state at the wrong place and hide an `agent()` call from it. Every deny names the construct and the fix.
+
+| Refused | Why | Do instead |
+|---|---|---|
+| a regex literal `/…/` where JS reads one: at the start of the script, after an operator or one of `( [ { } , ; :`, after a spread, after a keyword such as `return`, or after the `)` of an `if` / `while` / `for` / `with` header | a quote or a comment opener inside the regex pairs up with later text, and everything in between is blanked | `new RegExp('…')` |
+| a division followed on the same line by an unpaired quote and another `/` (`n / 2; const u = 'a/b'`), or by a comment glued to a word (`x/2//c`) | the same shape as a misread regex; this is the safety net for contexts the hook cannot classify | split the line, or put a space before the comment |
+| a backslash outside strings and comments | a regex body with escaped slashes, or an identifier escape such as `\u006dodel` | `new RegExp('…')`, plain identifiers |
+| an unescaped newline or CR inside a `'` / `"` string (a `\` line continuation is fine), U+2028 / U+2029 anywhere, `<!--` or `-->` in code | JS treats these as line ends or comments, the hook would not | template literals for multi-line text, remove the separators |
+| `agent` used other than as a direct call (alias, argument, property), or reached through `eval`, `Function`, `globalThis` | call sites cannot be counted | call `agent(...)` directly |
+
+Division after an identifier, a number, `]` or a non-header `)` is read as division: `Math.round(budget.remaining()/1000)`, `done / total + '%' // progress` and `a / b + ' of ' + c / d` pass.
+
+### Checking it
+
+`python3 ~/.claude/hooks/subagent-model-guard.py --self-test` runs 142 regression cases and prints the env values it found. `lapbar doctor` runs that self-test and three probes (missing model, valid call, haiku without a tag) against the installed copy. The hidden-call shapes found so far are listed in `CHANGELOG.md`.
 
 ## What was removed from the public release
 
