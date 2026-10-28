@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 - Unreleased
+## 0.2.0 - 2026-10-28
 
 - `subagent-model-guard`: **haiku role mode** (`SUBAGENT_HAIKU_ROLE_MODE=role` in the `env` block of `settings.json`, default off) - haiku passes without an approval tag when the call carries a `[haiku role: …]` tag and a `[verify: …]` tag and its effort is medium or high. The approval tag keeps working in either mode.
 - `subagent-model-guard`: the name inside the approval tags comes from `SUBAGENT_GUARD_OWNER` (default `owner`; a `<placeholder>` counts as unset), so a team can require `[alice-approved: fable]`.

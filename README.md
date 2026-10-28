@@ -4,17 +4,17 @@
 
 *Named after the lap bar on a roller coaster: it keeps you in your seat, it is not a cage.*
 
-**An expensive model for thinking, cheap models for the legwork - a Claude Code harness enforced by hooks, plus a report that shows how much it saved.**
+**An expensive model for thinking, cheap models for the legwork - a Claude Code harness enforced by hooks, plus a report that shows what the split is worth.**
 
-> One line: `lapbar install` drops a small set of Claude Code hooks, rules and skills into `~/.claude`; `lapbar report` reads your own transcripts and shows how much cheaper your subagents were than running everything on the head model.
+> One line: `lapbar install` drops a small set of Claude Code hooks, rules and skills into `~/.claude`; `lapbar report` reads your own transcripts and shows how much cheaper your subagents were than the same requests at the head model's rate.
 
 ## Install
 
 ```
-# From PyPI (coming soon)
+# From PyPI
 pipx install lapbar                 # or: uv tool install lapbar
 
-# From source (works today)
+# From source
 git clone https://github.com/mysoul7306/lapbar && cd lapbar
 pipx install .                      # or: pip install .
 ```
@@ -25,7 +25,7 @@ Then:
 lapbar install --dry-run            # what would be installed, nothing written
 lapbar install                      # hooks + rules + skills + agent into ~/.claude, settings.json wired (backup kept)
 lapbar doctor                       # everything in place, hook self-tests pass
-lapbar report --since 2026-10-13    # your own savings, from your own transcripts
+lapbar report --since <install date> # your own numbers, from your own transcripts
 lapbar session                      # one session: hook injection, rules loaded, subagent models, tokens
 ```
 
@@ -40,27 +40,37 @@ The most expensive thing in Claude Code is the head model doing the legwork. Sub
 
 Both guards are **regex-based**: a safety net against the AI accidentally pushing or forgetting a model, not a sandbox against deliberate evasion (eval, config injection, shell tricks). Known evasion shapes are closed one by one as self-test cases (push 60, model 153), and the model guard's JS reader is checked against a real parser by a differential fuzz (`tools/fuzz/`, 0 bypasses in 60,000 scripts on this version); an AST-parser rewrite is the next milestone. What that means for `Workflow` scripts is listed in [What a Workflow script may not contain](#what-a-workflow-script-may-not-contain).
 
-## How much it saves
+## What `lapbar report` measures
 
-`lapbar report` reads the transcripts (jsonl) under `~/.claude/projects/`, collects per-request model and tokens (input, output, cache read / write), and compares actual cost against a **counterfactual: every subagent request re-priced at the head model's rate**. It needs no before/after setup, so numbers show up on day one.
+`lapbar report` reads the transcripts (jsonl) under `~/.claude/projects/`, collects per-request model and tokens (input, output, cache read / write) and prices them at list price. The saving it shows is a **counterfactual: the same subagent requests, same tokens, re-priced at the head model's rate**. It needs no before / after setup, so numbers show up on day one.
 
-Measured by the person who built this harness (10 days since turning the hooks on 2026-10-13, `lapbar report --since 2026-10-13`, run on the night of 2026-10-22):
+```
+lapbar report                          # whole history
+lapbar report --since <install date>   # since you turned the hooks on
+lapbar report --head claude-opus-5-5   # if the inferred head model is not yours
+lapbar report --json                   # the same report as JSON
+```
+
+What it does and does not say:
+
+- The saving is the price gap between your head model and the models your subagents ran on. A fable head with opus subagents is a 2.5x gap on input and output and 1.25x on cache reads. An opus head with opus subagents is a gap of zero. A sonnet head with opus subagents comes out negative (the report then says `cost $X more`).
+- It does not claim you would have made the same calls without the harness. Each subagent starts its own context, so "everything on the head model, inline" would use fewer tokens than this counterfactual. Read it as what the tier split is worth, not as a savings guarantee.
+- Rates are public list price (`src/lapbar/prices.json`, 7 models, dated) × tokens, so they are an **estimate**, not an invoice. Models missing from the table count as $0 on both sides. Cache writes at 1-hour TTL are priced at input × 2 (an estimate). Override with `--prices`.
+- Each requestId is counted once (one response leaves a record per content block; the record with the largest output is kept). `<synthetic>` is excluded. Head vs subagent is classified by file path (`<session>.jsonl` vs `subagents/`), which assumes the post-2026-10 transcript layout.
+- Give the head model with `--head`, or it is inferred as the costliest model on the head side (shown as `inferred` in the output).
+
+### One data point: the author's
+
+Head model fable, subagents 97% opus, heavy Workflow use, the 10 days after turning the hooks on (2026-10-13 to 2026-10-22, one run of `lapbar report --since 2026-10-13 --until 2026-10-22`):
 
 | Metric | Value |
 |---|---|
-| Requests | 16,051 (head 6,501, subagent 9,550, of which workflow 8,031) |
-| Actual cost (list-price estimate) | $2,897.65 |
-| If every subagent had run on the head model | $3,929.62 |
-| **Savings** | **$1,031.97** - 26.3% of the counterfactual, 35.6% of actual spend |
-| Subagent effort | high 65%, xhigh 33%, medium 2% |
-| Share of cache writes at 1-hour TTL | 40% (1-hour writes priced at input rate × 2) |
+| Requests | 17,432 (head 6,852, subagent 10,580, of which workflow 8,031) |
+| Actual cost (list-price estimate) | $3,100.75 |
+| Same subagent requests at the head rate | $4,299.48 |
+| **Saving** | **$1,198.73** - 27.9% of the counterfactual |
 
-97% of subagent requests ran on opus (fable 2%, opus 4.8 1%); the savings are that rate gap. Head-side cost (~$1,507) is left untouched, so looking at the subagent share alone, it drops below half.
-
-- Rates are public list price (`src/lapbar/prices.json`, dated) × tokens, so they are an **estimate**, not a real invoice. Override with `--prices`.
-- Each requestId is counted once (one response leaves a record per content block; the record with the largest output is kept). `<synthetic>` is excluded. Head vs subagent is classified by file path (`<session>.jsonl` vs `subagents/`), which assumes the post-2026-10 transcript layout.
-- Give the head model with `--head`, or it is inferred as the costliest model on the head side (shown as `inferred` in the output).
-- To see your own numbers, dump them with `lapbar report --json > report.json`.
+Head-side cost ($1,930) is the same on both sides, so the subagent share alone went from $2,369 to $1,171 (× 0.49). 94% of subagent tokens were cache reads, where the fable / opus gap is only 1.25x; that is why it is not 2.5x cheaper.
 
 ## What gets installed
 
@@ -92,7 +102,7 @@ Assumes a Claude Code where the `Agent` tool has an `effort` parameter and the `
 1. `lapbar install` → restart Claude Code
 2. When you call a subagent, name the model and effort (fable and haiku also need a tag, see below). If you don't, the hook blocks it and shows why.
 3. Review with `/review-lane`, long tasks with `/lane`.
-4. Occasionally look at the numbers with `lapbar report`, and at one session with `lapbar session`.
+4. Occasionally look at the numbers with `lapbar report` ([what it measures](#what-lapbar-report-measures)), and at one session with `lapbar session`.
 5. For "was this ever here before?" questions during planning, hand the question to the `scout-git` agent; its git is read-only.
 
 What the guard checks, the tags, and the optional `settings.json` `env` keys (effort cap, haiku role mode, owner name) are in [The model guard in detail](#the-model-guard-in-detail).
