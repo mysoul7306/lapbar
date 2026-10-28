@@ -29,7 +29,8 @@ Check rules:
   7. fail-closed: a regex literal (a `/` after an operator, an opening bracket, the start of the script or a keyword such
      as return - its quotes can pair up with a later regex and hide an agent() in between), a `/` that could be division
      or a regex (after `)`, `]`, `...` or an identifier) when a quote and another `/` follow on the same line (the same
-     pairing trick; move the string or the division to its own line), a newline inside a quoted string (a JS syntax
+     pairing trick; move the string or the division to its own line), a backslash in code position (a regex body with
+     escaped slashes would open a comment; an identifier escape renames a key), a newline inside a quoted string (a JS syntax
      error; the same hiding trick across lines), an unclosed string or comment, an unreadable scriptPath, and
      internal hook exceptions are all denied. A call by saved workflow name looks up `~/.claude/workflows/<name>.js`
      and `<cwd>/.claude/workflows/<name>.js` and checks it; if neither exists (built in) it passes.
@@ -186,6 +187,10 @@ def blank_strings_and_comments(src):
                 if next_slash != -1 and any(q in rest[:next_slash] for q in ("'", '"', "`")):
                     raise ValueError("a `/` that could be division or a regex literal is followed by a quote and another `/` on the same line - "
                                      "the hook cannot tell them apart; move the string or the division to its own line, or use new RegExp('…')")
+            if c == "\\":
+                # legal JS has no backslash in code position: it is a regex body (`/a\/\//` - the escaped slashes would
+                # open a line comment and hide the rest of the line) or an identifier escape (`m`); both are unreadable here
+                raise ValueError("a backslash outside strings and comments (a regex literal with an escaped slash, or an identifier escape) cannot be read - use new RegExp('…')")
             if c in ("'", '"', "`"):
                 state = c; out.append(c); prev, last, word = last, c, ""; i += 1; continue        # keep the quote itself (to track literal positions)
             if stack:
@@ -881,6 +886,10 @@ def _self_test():
          wf("const t = total / count + ' items'\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
         ("CRLF line continuation inside a string → pass",
          wf("const s = 'ab\\\r\ncd'\r\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
+        ("a regex after `)` with escaped slashes opens a line comment that hides the rest of the line → deny (backslash in code)",
+         wf("if (x) /a\\/\\//.test(s); const r = await agent('p', {model: 'haiku', effort: 'max'})"), True, "cannot be parsed"),
+        ("an identifier escape in a bare key (\\u006dodel) → deny (backslash in code)",
+         wf("const a = await agent('p', {\\u006dodel: 'haiku', effort: 'max'})"), True, "cannot be parsed"),
     ]
     saved_cap = os.environ.pop("SUBAGENT_EFFORT_CAP", None)   # run with the default cap (the caller's values are restored at the very end)
     saved_role = os.environ.pop(HAIKU_ROLE_MODE_ENV, None)    # settings.json env may reach the shell too - run with role mode off

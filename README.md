@@ -38,7 +38,7 @@ The most expensive thing in Claude Code is the head model doing the legwork. Sub
 - **protected-branch push block** - `git-push-guard.py` denies pushes to develop / main / master, resolving refspec and upstream to decide, and failing closed when it can't. Merges by the AI, pushes by a human.
 - **memory hygiene** - `memory-lint-hook.py` checks the memory directory for broken links, public IPs, secrets and router size at session start.
 
-Both guards are **regex-based**: a safety net against the AI accidentally pushing or forgetting a model, not a sandbox against deliberate evasion (eval, config injection, shell tricks). Known evasion shapes are closed one by one as self-test cases (push 60, model 122); an AST-parser rewrite is the next milestone. One consequence for `Workflow` scripts: regex literals (`/…/`) are denied, as is a division followed by a quote and another `/` on the same line - the hook cannot tell the two apart, and a regex with a quote inside can hide an `agent()` call. Use `new RegExp('…')` and split such lines.
+Both guards are **regex-based**: a safety net against the AI accidentally pushing or forgetting a model, not a sandbox against deliberate evasion (eval, config injection, shell tricks). Known evasion shapes are closed one by one as self-test cases (push 60, model 124); an AST-parser rewrite is the next milestone. One consequence for `Workflow` scripts: regex literals (`/…/`) are denied, as is a division followed by a quote and another `/` on the same line, and any backslash outside strings and comments - the hook cannot tell division from a regex, and a regex with a quote or an escaped slash inside can hide an `agent()` call. Use `new RegExp('…')` and split such lines.
 
 ## How much it saves
 
@@ -66,7 +66,7 @@ Measured by the person who built this harness (10 days since turning the hooks o
 
 | Kind | File | What it does |
 |---|---|---|
-| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | forces model and effort literals, top and bottom tiers need a tag (or the haiku role tags in role mode). `--self-test` 122 cases |
+| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | forces model and effort literals, top and bottom tiers need a tag (or the haiku role tags in role mode). `--self-test` 124 cases |
 | hook | `hooks/git-push-guard.py` (PreToolUse: Bash) | denies develop / main / master push, fail-closed. `--self-test` 60 cases |
 | hook | `hooks/memory-lint-hook.py` (SessionStart) + `scripts/memory-lint.py` | checks the memory directory, notifies only on problems |
 | hook | `hooks/git-readonly-guard.py` (agent-scoped PreToolUse: Bash, not wired into `settings.json`) | allowlist for read-only git inside the `scout-git` agent: pipes, redirects, write subcommands and unknown options are denied, `--no-ext-diff` is forced. `--self-test` 76 cases |
