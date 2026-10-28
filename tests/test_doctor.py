@@ -342,8 +342,8 @@ class PackagedProbeTest(unittest.TestCase):
                 inst.install(target, ("hooks",))
                 hooks = [a for a in asset_mod.load_manifest() if a.is_hook and a.probes]
                 checks = [c for h in hooks for c in doctor.check_probes(h, target, sys.executable)]
-        self.assertEqual(len(checks), 6, [c.item for c in checks])
-        self.assertEqual([c.result for c in checks], [doctor.PASS] * 6,
+        self.assertEqual(len(checks), 7, [c.item for c in checks])
+        self.assertEqual([c.result for c in checks], [doctor.PASS] * 7,
                          [(c.item, c.detail) for c in checks])
 
 
