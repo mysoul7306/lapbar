@@ -4,17 +4,17 @@
 
 *롤러코스터 무릎 안전바 (lap bar) 에서 따온 이름 - 자리에 붙잡아 주는 장치이지 가두는 우리가 아니다.*
 
-**비싼 모델을 머리로, 싼 모델을 손발로 - hook 이 강제하는 Claude Code 하네스와, 그게 얼마나 아꼈는지 보여 주는 리포트.**
+**비싼 모델을 머리로, 싼 모델을 손발로 - hook 이 강제하는 Claude Code 하네스와, 티어를 나눈 값어치를 보여 주는 리포트.**
 
-> 한 줄 요약: `lapbar install` 이 Claude Code hook, rules, skills 몇 개를 `~/.claude` 에 깔고, `lapbar report` 가 내 transcript 를 읽어 서브에이전트를 머리 모델로 다 돌렸을 때보다 얼마나 싸게 했는지 보여 준다.
+> 한 줄 요약: `lapbar install` 이 Claude Code hook, rules, skills 몇 개를 `~/.claude` 에 깔고, `lapbar report` 가 내 transcript 를 읽어 같은 서브에이전트 요청을 머리 모델 단가로 매겼을 때보다 얼마나 싸게 했는지 보여 준다.
 
 ## 설치
 
 ```
-# PyPI (준비 중)
+# PyPI
 pipx install lapbar               # or: uv tool install lapbar
 
-# 소스에서 (지금 동작)
+# 소스에서
 git clone https://github.com/mysoul7306/lapbar && cd lapbar
 pipx install .                    # or: pip install .
 ```
@@ -25,7 +25,7 @@ pipx install .                    # or: pip install .
 lapbar install --dry-run          # what would be installed, nothing written
 lapbar install                    # hooks + rules + skills + agent into ~/.claude, settings.json wired (backup kept)
 lapbar doctor                     # everything in place, hook self-tests pass
-lapbar report --since 2026-10-13  # your own savings, from your own transcripts
+lapbar report --since <설치한 날>  # 내 숫자를, 내 transcript 에서
 lapbar session                    # one session: hook injection, rules loaded, subagent models, tokens
 ```
 
@@ -40,27 +40,37 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 
 두 가드는 **정규식 기반** 이다 - AI 가 실수로 push 하거나 model 을 빠뜨리는 걸 막는 안전장치이지, 작정한 우회 (eval, 설정 주입, 셸 트릭) 를 전부 막는 샌드박스가 아니다. 알려진 우회 꼴은 self-test 케이스로 하나씩 닫고 있고 (push 60, model 153), model guard 의 JS 읽기는 진짜 파서와 비교하는 차등 퍼징 (`tools/fuzz/`, 이 판에서 60,000 스크립트 중 우회 0) 으로 점검한다. AST 파서 전환은 다음 판 과제. 그래서 `Workflow` 스크립트에 쓰면 안 되는 것은 [Workflow 스크립트에 쓰면 안 되는 것](#workflow-스크립트에-쓰면-안-되는-것) 에 모아 두었다.
 
-## 얼마나 아끼나
+## `lapbar report` 가 재는 것
 
-`lapbar report` 는 `~/.claude/projects/` 의 transcript (jsonl) 를 읽어 요청마다 모델과 토큰 (input, output, cache read / write) 을 모으고, **서브에이전트 요청 전부를 머리 모델 단가로 다시 계산한 가정 비용** 과 실제 비용을 비교한다. before / after 가 필요 없는 반사실 계산이라 설치 첫날부터 숫자가 나온다.
+`lapbar report` 는 `~/.claude/projects/` 의 transcript (jsonl) 를 읽어 요청마다 모델과 토큰 (input, output, cache read / write) 을 모으고 list price 로 값을 매긴다. 보여 주는 절감액은 반사실이다: **같은 서브에이전트 요청, 같은 토큰을 머리 모델 단가로 다시 매긴 값**. before / after 가 필요 없어서 설치 첫날부터 숫자가 나온다.
 
-이 하네스를 만든 사람의 실측 (hook 을 켠 2026-10-13 부터 10일, `lapbar report --since 2026-10-13`, 2026-10-22 밤 실행):
+```
+lapbar report                          # 전체 기간
+lapbar report --since <설치한 날>       # hook 을 켠 뒤만
+lapbar report --head claude-opus-5-5   # 추론된 머리 모델이 내 것이 아닐 때
+lapbar report --json                   # 같은 리포트를 JSON 으로
+```
+
+말하는 것과 말하지 않는 것:
+
+- 절감은 머리 모델과 서브에이전트가 돈 모델의 단가 차이다. fable 머리 + opus 서브에이전트는 input, output 에서 2.5배, cache read 에서 1.25배 차이. opus 머리 + opus 서브에이전트는 0. sonnet 머리 + opus 서브에이전트는 음수다 (리포트는 `cost $X more` 로 찍는다).
+- 하네스가 없었어도 같은 호출을 했을 거라고 주장하지 않는다. 서브에이전트마다 컨텍스트를 새로 시작하므로 [전부 머리 모델이 인라인으로] 였다면 토큰이 이 반사실보다 적다. 티어 분할의 가치로 읽지, 절감 보장으로 읽지 않는다.
+- 단가는 공개 list price (`src/lapbar/prices.json`, 모델 7개, 기준일 명시) × 토큰이라 **추정치** 다 (실청구가 아니다). 표에 없는 모델은 양쪽 다 $0 으로 빠진다. 1시간 TTL 캐시 쓰기는 input × 2 (추정). `--prices` 로 바꿀 수 있다.
+- 같은 requestId 는 한 번만 센다 (한 응답이 content block 마다 레코드를 남긴다, output 이 가장 큰 레코드 채택). `<synthetic>` 은 제외. 머리/서브에이전트 분류는 파일 경로 (`<세션>.jsonl` vs `subagents/`) 기준이라 2026-10 이후 transcript 구조를 전제한다.
+- 머리 모델은 `--head` 로 주거나, 없으면 머리 쪽에서 비용이 가장 큰 모델로 추론한다 (출력에 `inferred` 표시).
+
+### 사례 하나: 저자의 숫자
+
+머리 모델 fable, 서브에이전트 97% opus, Workflow 를 많이 쓴 사람의 hook 을 켠 뒤 10일 (2026-10-13 ~ 2026-10-22, `lapbar report --since 2026-10-13 --until 2026-10-22` 한 번 실행):
 
 | 항목 | 값 |
 |---|---|
-| 요청 수 | 16,051 (머리 6,501, 서브에이전트 9,550, 그중 workflow 8,031) |
-| 실제 비용 (list price 추정) | $2,897.65 |
-| 서브에이전트까지 전부 머리 모델이었다면 | $3,929.62 |
-| **절감** | **$1,031.97** - 가정 비용 대비 26.3%, 실제 지출 대비 35.6% |
-| 서브에이전트 effort | high 65%, xhigh 33%, medium 2% |
-| 캐시 쓰기 중 1시간 TTL 비중 | 40% (1시간 쓰기는 input 단가 × 2 로 계산) |
+| 요청 수 | 17,432 (머리 6,852, 서브에이전트 10,580, 그중 workflow 8,031) |
+| 실제 비용 (list price 추정) | $3,100.75 |
+| 같은 서브에이전트 요청을 머리 단가로 | $4,299.48 |
+| **절감** | **$1,198.73** - 가정 비용 대비 27.9% |
 
-서브에이전트 요청의 97% 가 opus 로 돌았고 (fable 2%, opus 4.8 1%), 절감액은 그 단가 차이다. 머리 쪽 비용 ($1,507 안팎) 은 건드리지 않은 숫자라 서브에이전트 몫만 보면 비용이 절반 아래로 내려간다.
-
-- 단가는 공개 list price (`src/lapbar/prices.json`, 기준일 명시) × 토큰이라 **추정치** 다 (실청구가 아니다). `--prices` 로 바꿀 수 있다.
-- 같은 requestId 는 한 번만 센다 (한 응답이 content block 마다 레코드를 남긴다, output 이 가장 큰 레코드 채택). `<synthetic>` 은 제외. 머리/서브에이전트 분류는 파일 경로 (`<세션>.jsonl` vs `subagents/`) 기준이라 2026-10 이후 transcript 구조를 전제한다.
-- 머리 모델은 `--head` 로 주거나, 없으면 머리 쪽에서 비용이 가장 큰 모델로 추론한다 (출력에 `inferred` 표시).
-- 자기 숫자를 보려면 `lapbar report --json > report.json` 으로 뽑아 두면 된다.
+머리 쪽 비용 ($1,930) 은 양쪽이 같으니 서브에이전트 몫만 보면 $2,369 에서 $1,171 로 (× 0.49). 서브에이전트 토큰의 94% 가 cache read 인데 거기서 fable / opus 격차는 1.25배뿐이라, 2.5배만큼 싸지지는 않는다.
 
 ## 설치 뒤 생기는 것
 
@@ -92,7 +102,7 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 1. `lapbar install` → Claude Code 재시작
 2. 서브에이전트를 부를 때 model 과 effort 를 적는다 (fable, haiku 는 표지도 필요하다, 아래 참조). 안 적으면 hook 이 막고 이유를 보여 준다
 3. 리뷰는 `/review-lane`, 긴 작업은 `/lane` 으로
-4. 가끔 `lapbar report` 로 숫자를, `lapbar session` 으로 한 세션을 본다
+4. 가끔 `lapbar report` 로 숫자를 ([무엇을 재나](#lapbar-report-가-재는-것)), `lapbar session` 으로 한 세션을 본다
 5. 계획 중 "이거 전에 있었나?" 는 `scout-git` 에이전트에 맡긴다. git 이 읽기 전용이라 안전하다
 
 가드가 무엇을 보는지, 표지, `settings.json` 의 선택 `env` 키 (effort 상한, haiku 역할 모드, 소유자 이름) 는 [model guard 자세히](#model-guard-자세히) 에 있다.
