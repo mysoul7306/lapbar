@@ -364,7 +364,7 @@ class MissingAssetTest(InstallTestCase):
                                      "hooks/git-readonly-guard.py"})
         hooks = {a.dst: a for a in manifest if a.is_hook}
         expects = {dst: [p.expect for p in h.probes] for dst, h in hooks.items()}
-        self.assertEqual(expects, {"hooks/subagent-model-guard.py": ["deny", "allow"],
+        self.assertEqual(expects, {"hooks/subagent-model-guard.py": ["deny", "allow", "deny"],
                                    "hooks/git-push-guard.py": ["deny", "allow"],
                                    "hooks/git-readonly-guard.py": ["deny", "allow"],
                                    "hooks/memory-lint-hook.py": []})

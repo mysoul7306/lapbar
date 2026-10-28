@@ -33,12 +33,12 @@ lapbar session                    # one session: hook injection, rules loaded, s
 
 Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 것** 이다. 파일 훑기, 리뷰 렌즈, 수집 같은 서브에이전트 작업은 더 싼 모델로도 품질이 같은데, `Agent` / `Workflow` 호출에 model 을 안 적으면 머리 모델을 그대로 상속한다. 그래서 hook 으로 막았다.
 
-- **model, effort 는 리터럴로** - `subagent-model-guard.py` 가 `Agent`, `Task`, `Workflow` 호출에서 model 생략, 변수, 삼항식을 거부하고 (deny), 최상위 모델 (fable) 과 최하위 모델 (haiku, 품질 사고 전례로 기본 차단) 은 그 호출 안에 `[owner-approved: <모델>]` 표지가 있을 때만 허용한다. effort 도 같은 규칙 (low / medium / high / xhigh 리터럴). 허용 모델 이름은 hook 의 `TIERS` 표 하나에서 바꾼다.
+- **model, effort 는 리터럴로** - `subagent-model-guard.py` 가 `Agent`, `Task`, `Workflow` 호출에서 model 생략, 변수, 삼항식을 거부하고 (deny), 최상위 모델 (fable) 과 최하위 모델 (haiku, 품질 사고 전례로 기본 차단) 은 그 호출 안에 `[owner-approved: <모델>]` 표지가 있을 때만 허용한다. effort 도 같은 규칙 (low / medium / high / xhigh 리터럴). 허용 모델 이름은 hook 의 `TIERS` 표 하나에서 바꾼다. **haiku 역할 모드** (`settings.json` `env` 의 `SUBAGENT_HAIKU_ROLE_MODE=role`) 를 켜면 그 호출에 `[haiku role: <기계적 일>]` 표지와 `[verify: <부모가 돌릴 검증>]` 표지가 있고 effort 가 medium / high 면 haiku 도 통과한다 - 부모가 기계적으로 검증하는 일 (테스트 XML 집계, lint 큐 정리, grep 요약) 용이다. `SUBAGENT_GUARD_OWNER` 는 표지에 이름을 넣는다 (`[alice-approved: fable]`) - 누가 허용했는지가 표지에 남는다.
 - **레인 루프** - `/lane` (머리는 해독, 분해, 종합만; read 는 opus high, collect 는 sonnet low, refute 는 opus xhigh) 과 `/review-lane` (렌즈 3 → 반박자 2, agent 상한 10) 이 그 배분을 절차로 굳힌다.
 - **보호 브랜치 push 차단** - `git-push-guard.py` 가 develop / main / master 로 가는 push 를 refspec, upstream 까지 풀어 판정하고 못 풀면 fail-closed 로 막는다. 머지는 AI 가, push 는 사람이.
 - **메모리 위생** - `memory-lint-hook.py` 가 세션 시작 때 메모리 디렉토리의 깨진 링크, 공인 IP, 비밀값, 라우터 크기를 점검한다.
 
-두 가드는 **정규식 기반** 이다 - AI 가 실수로 push 하거나 model 을 빠뜨리는 걸 막는 안전장치이지, 작정한 우회 (eval, 설정 주입, 셸 트릭) 를 전부 막는 샌드박스가 아니다. 알려진 우회 꼴은 self-test 케이스로 하나씩 닫고 있고 (push 60, model 80), AST 파서 전환은 다음 판 과제.
+두 가드는 **정규식 기반** 이다 - AI 가 실수로 push 하거나 model 을 빠뜨리는 걸 막는 안전장치이지, 작정한 우회 (eval, 설정 주입, 셸 트릭) 를 전부 막는 샌드박스가 아니다. 알려진 우회 꼴은 self-test 케이스로 하나씩 닫고 있고 (push 60, model 111), AST 파서 전환은 다음 판 과제.
 
 ## 얼마나 아끼나
 
@@ -66,7 +66,7 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 
 | 종류 | 파일 | 하는 일 |
 |---|---|---|
-| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | model, effort 리터럴 강제, 상위 티어는 표지 필요. `--self-test` 80 케이스 |
+| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | model, effort 리터럴 강제, 상위, 하위 티어는 표지 필요 (역할 모드면 haiku 는 역할 표지). `--self-test` 111 케이스 |
 | hook | `hooks/git-push-guard.py` (PreToolUse: Bash) | develop / main / master push deny, fail-closed. `--self-test` 60 케이스 |
 | hook | `hooks/memory-lint-hook.py` (SessionStart) + `scripts/memory-lint.py` | 메모리 디렉토리 점검, 문제 있을 때만 알림 |
 | hook | `hooks/git-readonly-guard.py` (에이전트 전용 PreToolUse: Bash, `settings.json` 에는 안 들어감) | `scout-git` 에이전트 안에서 읽기 전용 git 만 통과시키는 allowlist: 파이프, 리다이렉트, 쓰기 서브커맨드, 모르는 옵션은 deny, `--no-ext-diff` 강제. `--self-test` 76 케이스 |
@@ -94,6 +94,18 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 3. 리뷰는 `/review-lane`, 긴 작업은 `/lane` 으로
 4. 가끔 `lapbar report` 로 숫자를, `lapbar session` 으로 한 세션을 본다
 5. 계획 중 "이거 전에 있었나?" 는 `scout-git` 에이전트에 맡긴다. git 이 읽기 전용이라 안전하다
+
+`settings.json` 의 `env` 키 세 개가 model guard 를 조절한다 (`lapbar install` 은 env 를 쓰지 않는다. Claude Code 는 `env` 블록을 hook 에 넘기지만 터미널 셸에는 안 실린다):
+
+```
+"env": {
+  "SUBAGENT_EFFORT_CAP": "xhigh",
+  "SUBAGENT_HAIKU_ROLE_MODE": "role",
+  "SUBAGENT_GUARD_OWNER": "alice"
+}
+```
+
+`SUBAGENT_EFFORT_CAP` 은 표지 없이 허용되는 effort 상한 (기본 `xhigh`), `SUBAGENT_HAIKU_ROLE_MODE=role` 은 haiku 역할 모드 (기본 off), `SUBAGENT_GUARD_OWNER` 는 허용 표지 안의 이름 (기본 `owner`, 그래서 기본 표지가 `[owner-approved: fable]`). hook 의 `--self-test` 가 끝에 `settings.json` 에서 읽은 세 값을 찍어 준다.
 
 hook 메시지는 영어다. 규칙 파일과 `/lane`, `/review-lane` 절차는 한국어 (이 하네스를 쓴 사람의 작업 언어). 필요하면 복사해서 고쳐 쓰면 된다 - 그래서 `install` 이 덮어쓰기를 하지 않는다.
 

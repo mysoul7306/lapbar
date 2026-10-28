@@ -33,12 +33,12 @@ lapbar session                      # one session: hook injection, rules loaded,
 
 The most expensive thing in Claude Code is the head model doing the legwork. Subagent work - scanning files, review lenses, collection - is just as good on a cheaper model, but an `Agent` / `Workflow` call that doesn't name a model inherits the head model. So hooks block that.
 
-- **model and effort must be literals** - `subagent-model-guard.py` denies a missing model, a variable, or a ternary in `Agent` / `Task` / `Workflow` calls. The top tier (fable) and the bottom tier (haiku, blocked by default after quality incidents) are allowed only with an `[owner-approved: <model>]` tag inside that same call. Effort follows the same rule (low / medium / high / xhigh literals). Allowed model names live in the hook's single `TIERS` table.
+- **model and effort must be literals** - `subagent-model-guard.py` denies a missing model, a variable, or a ternary in `Agent` / `Task` / `Workflow` calls. The top tier (fable) and the bottom tier (haiku, blocked by default after quality incidents) are allowed only with an `[owner-approved: <model>]` tag inside that same call. Effort follows the same rule (low / medium / high / xhigh literals). Allowed model names live in the hook's single `TIERS` table. With **haiku role mode** (`SUBAGENT_HAIKU_ROLE_MODE=role` in the `env` block of `settings.json`), haiku also passes when the call carries a `[haiku role: <mechanical job>]` tag and a `[verify: <check the parent will run>]` tag and its effort is medium or high - for work the parent verifies mechanically (test XML aggregation, lint queue cleanup, grep summaries). `SUBAGENT_GUARD_OWNER` puts a name into the tags (`[alice-approved: fable]`), so an approval names a person.
 - **lane loop** - `/lane` (the head only decodes, decomposes and synthesizes; read is opus high, collect is sonnet low, refute is opus xhigh) and `/review-lane` (3 lenses → 2 refuters, agent cap 10) turn that split into a procedure.
 - **protected-branch push block** - `git-push-guard.py` denies pushes to develop / main / master, resolving refspec and upstream to decide, and failing closed when it can't. Merges by the AI, pushes by a human.
 - **memory hygiene** - `memory-lint-hook.py` checks the memory directory for broken links, public IPs, secrets and router size at session start.
 
-Both guards are **regex-based**: a safety net against the AI accidentally pushing or forgetting a model, not a sandbox against deliberate evasion (eval, config injection, shell tricks). Known evasion shapes are closed one by one as self-test cases (push 60, model 80); an AST-parser rewrite is the next milestone.
+Both guards are **regex-based**: a safety net against the AI accidentally pushing or forgetting a model, not a sandbox against deliberate evasion (eval, config injection, shell tricks). Known evasion shapes are closed one by one as self-test cases (push 60, model 111); an AST-parser rewrite is the next milestone.
 
 ## How much it saves
 
@@ -66,7 +66,7 @@ Measured by the person who built this harness (10 days since turning the hooks o
 
 | Kind | File | What it does |
 |---|---|---|
-| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | forces model and effort literals, top tier needs a tag. `--self-test` 80 cases |
+| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | forces model and effort literals, top and bottom tiers need a tag (or the haiku role tags in role mode). `--self-test` 111 cases |
 | hook | `hooks/git-push-guard.py` (PreToolUse: Bash) | denies develop / main / master push, fail-closed. `--self-test` 60 cases |
 | hook | `hooks/memory-lint-hook.py` (SessionStart) + `scripts/memory-lint.py` | checks the memory directory, notifies only on problems |
 | hook | `hooks/git-readonly-guard.py` (agent-scoped PreToolUse: Bash, not wired into `settings.json`) | allowlist for read-only git inside the `scout-git` agent: pipes, redirects, write subcommands and unknown options are denied, `--no-ext-diff` is forced. `--self-test` 76 cases |
@@ -94,6 +94,18 @@ Assumes a Claude Code where the `Agent` tool has an `effort` parameter and the `
 3. Review with `/review-lane`, long tasks with `/lane`.
 4. Occasionally look at the numbers with `lapbar report`, and at one session with `lapbar session`.
 5. For "was this ever here before?" questions during planning, hand the question to the `scout-git` agent; its git is read-only.
+
+Three optional `env` keys in `settings.json` tune the model guard (`lapbar install` does not write them; Claude Code passes the `env` block to hooks, a terminal shell does not):
+
+```
+"env": {
+  "SUBAGENT_EFFORT_CAP": "xhigh",
+  "SUBAGENT_HAIKU_ROLE_MODE": "role",
+  "SUBAGENT_GUARD_OWNER": "alice"
+}
+```
+
+`SUBAGENT_EFFORT_CAP` is the highest effort allowed without a tag (default `xhigh`). `SUBAGENT_HAIKU_ROLE_MODE=role` turns on haiku role mode (default off). `SUBAGENT_GUARD_OWNER` is the name inside the approval tags (default `owner`, so the default tag is `[owner-approved: fable]`). The hook's `--self-test` prints the three values it finds in `settings.json` at the end.
 
 Hook messages are English. The rule files and the `/lane`, `/review-lane` procedures are in Korean (the working language of the person who uses this harness). Copy and edit them as you like - that is why `install` never overwrites.
 

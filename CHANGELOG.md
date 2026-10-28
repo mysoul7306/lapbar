@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.1.1 - Unreleased
+## 0.1.2 - Unreleased
+
+- `subagent-model-guard`: **haiku role mode** (`SUBAGENT_HAIKU_ROLE_MODE=role` in the `env` block of `settings.json`, default off) - haiku passes without an approval tag when the call carries a `[haiku role: …]` tag and a `[verify: …]` tag and its effort is medium or high. The approval tag keeps working in either mode.
+- `subagent-model-guard`: the name inside the approval tags comes from `SUBAGENT_GUARD_OWNER` (default `owner`; a `<placeholder>` counts as unset), so a team can require `[alice-approved: fable]`.
+- `subagent-model-guard`: fail-closed on regex literals (a `/` after an operator, an opening bracket, a line start or a keyword) and on a newline inside a quoted string - the quotes of two regex literals could pair up and hide an `agent()` call between them. A model name with two tier words (`opus-haiku`) is denied. The depth table is linear: a 1500-key schema took 17 seconds and outran the hook timeout, and a timed-out hook is skipped, not denied. `--self-test` 80 → 111 cases, with a 2-second timing case and a summary of the three env values found in `settings.json`.
+- `lapbar doctor`: a third probe for the model guard (haiku without a tag is denied).
+- Rules refreshed from the live harness: `subagent-review.md` (haiku role paragraph, the tier roles in one line), `lane.md` (the collect lane may use haiku in role mode), `zsh-pitfalls.md` (mawk has no IGNORECASE).
+
+## 0.1.1 - 2026-10-26
 
 - Hook messages, docstrings and comments are English (`subagent-model-guard`, `git-push-guard`, `memory-lint-hook`, `memory-lint`). Rule files and the lane procedures stay in Korean.
 - `lapbar bundle` keeps assets marked `keep` in the manifest (hooks and the `scout-git` agent are authored in this repo, not extracted from a live `~/.claude`).

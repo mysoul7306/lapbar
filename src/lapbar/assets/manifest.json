@@ -3,7 +3,8 @@
     {"src": "hooks/subagent-model-guard.py", "dst": "hooks/subagent-model-guard.py", "keep": true, "event": "PreToolUse", "matcher": "Task|Agent|Workflow", "selftest": true,
      "probes": [
        {"name": "agent call without a model is denied", "input": {"tool_name": "Agent", "tool_input": {"prompt": "probe", "subagent_type": "general-purpose", "description": "probe"}}, "expect": "deny"},
-       {"name": "agent call with model and effort passes", "input": {"tool_name": "Agent", "tool_input": {"prompt": "probe", "subagent_type": "general-purpose", "description": "probe", "model": "opus", "effort": "high"}}, "expect": "allow"}
+       {"name": "agent call with model and effort passes", "input": {"tool_name": "Agent", "tool_input": {"prompt": "probe", "subagent_type": "general-purpose", "description": "probe", "model": "opus", "effort": "high"}}, "expect": "allow"},
+       {"name": "haiku without a tag is denied", "input": {"tool_name": "Agent", "tool_input": {"prompt": "probe", "subagent_type": "general-purpose", "description": "probe", "model": "haiku", "effort": "medium"}}, "expect": "deny"}
      ]},
     {"src": "hooks/git-push-guard.py", "dst": "hooks/git-push-guard.py", "keep": true, "event": "PreToolUse", "matcher": "Bash", "selftest": true,
      "probes": [
