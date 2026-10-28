@@ -38,7 +38,7 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 - **보호 브랜치 push 차단** - `git-push-guard.py` 가 develop / main / master 로 가는 push 를 refspec, upstream 까지 풀어 판정하고 못 풀면 fail-closed 로 막는다. 머지는 AI 가, push 는 사람이.
 - **메모리 위생** - `memory-lint-hook.py` 가 세션 시작 때 메모리 디렉토리의 깨진 링크, 공인 IP, 비밀값, 라우터 크기를 점검한다.
 
-두 가드는 **정규식 기반** 이다 - AI 가 실수로 push 하거나 model 을 빠뜨리는 걸 막는 안전장치이지, 작정한 우회 (eval, 설정 주입, 셸 트릭) 를 전부 막는 샌드박스가 아니다. 알려진 우회 꼴은 self-test 케이스로 하나씩 닫고 있고 (push 60, model 134), AST 파서 전환은 다음 판 과제. 그래서 `Workflow` 스크립트에선 JS 가 정규식으로 읽는 자리 (연산자, 여는 괄호, 키워드, if / while / for / with 헤더의 `)` 뒤) 의 정규식 리터럴 (`/…/`) 과 문자열, 주석 밖의 백슬래시가 거부된다 (식별자, 숫자, `]`, 그 밖의 `)` 뒤 나눗셈은 괜찮다) - 따옴표, 이스케이프된 슬래시, 주석 기호가 든 정규식은 `agent()` 호출을 숨길 수 있어서다. 대신 `new RegExp('…')` 를 쓴다.
+두 가드는 **정규식 기반** 이다 - AI 가 실수로 push 하거나 model 을 빠뜨리는 걸 막는 안전장치이지, 작정한 우회 (eval, 설정 주입, 셸 트릭) 를 전부 막는 샌드박스가 아니다. 알려진 우회 꼴은 self-test 케이스로 하나씩 닫고 있고 (push 60, model 142), AST 파서 전환은 다음 판 과제. 그래서 `Workflow` 스크립트에선 JS 가 정규식으로 읽는 자리 (연산자, 여는 괄호, 키워드, if / while / for / with 헤더의 `)` 뒤) 의 정규식 리터럴 (`/…/`) 과 문자열, 주석 밖의 백슬래시가 거부된다 (식별자, 숫자, `]`, 그 밖의 `)` 뒤 나눗셈은 괜찮다) - 따옴표, 이스케이프된 슬래시, 주석 기호가 든 정규식은 `agent()` 호출을 숨길 수 있어서다. 대신 `new RegExp('…')` 를 쓴다. hook 이 문맥을 잘못 읽는 경우의 안전망으로, 나눗셈 뒤 같은 줄 다음 `/` 까지 짝 없는 따옴표가 있거나 (`n / 2; const u = 'a/b'`) 그 `/` 가 글자에 붙은 주석 시작이면 (`x/2//c`) 역시 거부한다 - 줄을 나누거나 띄어 쓴다.
 
 ## 얼마나 아끼나
 
@@ -66,7 +66,7 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 
 | 종류 | 파일 | 하는 일 |
 |---|---|---|
-| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | model, effort 리터럴 강제, 상위, 하위 티어는 표지 필요 (역할 모드면 haiku 는 역할 표지). `--self-test` 134 케이스 |
+| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | model, effort 리터럴 강제, 상위, 하위 티어는 표지 필요 (역할 모드면 haiku 는 역할 표지). `--self-test` 142 케이스 |
 | hook | `hooks/git-push-guard.py` (PreToolUse: Bash) | develop / main / master push deny, fail-closed. `--self-test` 60 케이스 |
 | hook | `hooks/memory-lint-hook.py` (SessionStart) + `scripts/memory-lint.py` | 메모리 디렉토리 점검, 문제 있을 때만 알림 |
 | hook | `hooks/git-readonly-guard.py` (에이전트 전용 PreToolUse: Bash, `settings.json` 에는 안 들어감) | `scout-git` 에이전트 안에서 읽기 전용 git 만 통과시키는 allowlist: 파이프, 리다이렉트, 쓰기 서브커맨드, 모르는 옵션은 deny, `--no-ext-diff` 강제. `--self-test` 76 케이스 |

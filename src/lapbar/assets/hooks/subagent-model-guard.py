@@ -29,7 +29,10 @@ Check rules:
   7. fail-closed: a regex literal (a `/` where JS reads one: after an operator, an opening bracket, `}`, a spread, the
      start of the script, a keyword such as return, or the `)` that closes an if / while / for / with header - a quote or
      a comment opener inside the regex would pair up with later text and hide an agent() in between; division after an
-     identifier, a number, `]` or any other `)` is read as division), a backslash in code position (a regex body with
+     identifier, a number, `]` or any other `)` is read as division; as a safety net for any context the hook misreads,
+     a `/` read as division is still denied when the text up to the next `/` on the same line holds an odd number of
+     quotes, or when that next `/` starts a comment glued to a word (`a//`, `a/*`) - the two shapes that let a regex hide
+     code), a backslash in code position (a regex body with
      escaped slashes would open a comment; an identifier escape renames a key), a newline inside a quoted string (a JS syntax
      error; the same hiding trick across lines), a unicode line separator (U+2028 / U+2029) anywhere and an HTML-style
      comment (`<!--`, line-leading `-->`) in code position (JS treats them as line ends and comments, the hook would not),
@@ -82,7 +85,8 @@ AGENT_ALIAS = re.compile(r'(?<![\w$])agent\b(?!\s*\()')
 DYNAMIC_ACCESS = re.compile(r'(?<![\w$.])(eval|Function|globalThis)\s*[(\[.]|\[\s*[\'"`]?agent[\'"`]?\s*\]')
 LITERAL = re.compile(r"""\s*(['"`])([A-Za-z0-9_.\-]+)\1""")         # string literal in a value position
 REGEX_PREV = set("(,=:[!&|?{};+-*%<>~^.")                           # a `/` after one of these is a regex literal, not division (`.` = after a spread)
-REGEX_KEYWORDS = {"return", "typeof", "case", "in", "of", "void", "delete", "instanceof", "new", "throw", "yield", "await", "else", "do", "default"}  # a `/` after one of these words is a regex too
+REGEX_KEYWORDS = {"return", "typeof", "case", "in", "of", "void", "delete", "instanceof", "new", "throw", "yield", "await", "else", "do", "default",
+                  "extends", "break", "continue"}                  # a `/` after one of these words is a regex too (not after `.word`, which is a property)
 CONTROL_WORDS = {"if", "while", "for", "with"}                      # a `/` after the `)` that closes one of these headers is a regex, after any other `)` division
 LINE_SEPARATORS = (" ", " ")                              # JS line terminators besides LF and CR - never needed in a script, so fail-closed
 OPT_KEYS = ("model", "effort")                                       # keys that must be literals at the top level of agent() opts
@@ -157,8 +161,11 @@ def blank_strings_and_comments(src):
     operator, an opening bracket, `}`, a spread, the start of the script, a keyword, or the `)` closing an if / while /
     for / with header - a paren stack remembers which `(` followed such a word) raises ValueError (fail-closed), because
     a quote or comment opener inside the regex would pair up with later text and hide the code in between. A `/` after
-    an identifier, a number, `]` or any other `)` is division, as in JS. A newline inside a ' or " string is a JS syntax
-    error and raises ValueError as well; U+2028 / U+2029 anywhere and HTML-style comments in code position raise too.
+    an identifier, a number, `]` or any other `)` is division, as in JS. Because the context can still be misread (the
+    hook is not a parser), a division is also refused when the text up to the next `/` on the same line has an odd
+    number of quotes or when that `/` opens a comment glued to a word - without a quote or a comment opener a misread
+    regex body cannot hide anything. A newline inside a ' or " string is a JS syntax error and raises ValueError as
+    well; U+2028 / U+2029 anywhere and HTML-style comments in code position raise too.
     """
     out = []
     n = len(src)
@@ -169,6 +176,8 @@ def blank_strings_and_comments(src):
     prev = None           # the character before that (`++ /` and `-- /` are division)
     word = ""             # the identifier word just before (a `/` after return, typeof, … is a regex)
     word_open = False     # still appending to that word (a blank closes it)
+    prev_word = ""        # the word before that (`for await (` is a control header)
+    kw_ok = True          # the current word is not a property name (`cfg.default / 2` is division)
     parens = []           # per open `(`: did an if / while / for / with precede it (then a `/` after its `)` is a regex)
     ctrl_close = False    # did the last `)` close such a header
     if any(sep in src for sep in LINE_SEPARATORS):
@@ -181,20 +190,34 @@ def blank_strings_and_comments(src):
                 state = "line"; out.append("  "); i += 2; continue
             if c == "/" and nxt == "*":
                 state = "block"; out.append("  "); i += 2; continue
-            is_regex = (last is None or (last in REGEX_PREV and not (last in "+-" and prev == last)) or word in REGEX_KEYWORDS
+            is_regex = (last is None or (last in REGEX_PREV and not (last in "+-" and prev == last)) or (word in REGEX_KEYWORDS and kw_ok)
                         or (last == ")" and ctrl_close))
             if c == "/" and is_regex:
                 # start of a regex literal - a quote or a comment opener inside it would open string or comment state, and
                 # when later text closes that state again, every agent() in between is blanked and escapes the check
                 raise ValueError("a regex literal (/…/) cannot be read by the hook - switch to new RegExp('…')")
+            if c == "/":
+                # division as far as the hook can tell. Safety net for a misread context: a regex body hides code only
+                # through an unpaired quote or a comment opener glued to its closing slash, so refuse exactly those shapes
+                j = i + 1
+                while j < n and src[j] not in "/\n\r":
+                    j += 1
+                if j < n and src[j] == "/":
+                    seg = src[i + 1:j]
+                    if any(seg.count(q) % 2 for q in ("'", '"', "`")):
+                        raise ValueError("a `/` read as division is followed on the same line by an unpaired quote and another `/` - "
+                                         "if that is a regex literal switch to new RegExp('…'); if it is division, move the string or the second `/` to its own line")
+                    if src[j + 1:j + 2] in ("/", "*") and seg and (seg[-1].isalnum() or seg[-1] in "_$."):
+                        raise ValueError("a comment opener (// or /*) glued to a word after a division on the same line looks like a regex closing - "
+                                         "put a space before the comment, or switch to new RegExp('…')")
             if c == "\\":
                 # legal JS has no backslash in code position: it is a regex body (`/a\/\//` - the escaped slashes would
                 # open a line comment and hide the rest of the line) or an identifier escape (`\\u006d`); both are unreadable here
                 raise ValueError("a backslash outside strings and comments (a regex literal with an escaped slash, or an identifier escape) cannot be read - use new RegExp('…')")
             if c == "<" and src.startswith("<!--", i):
                 raise ValueError("an HTML-style comment (<!--) in code position cannot be read - remove it")
-            if c == "-" and src.startswith("-->", i) and src[src.rfind("\n", 0, i) + 1:i].strip() == "":
-                raise ValueError("an HTML-style comment (--> at the start of a line) in code position cannot be read - remove it")
+            if c == "-" and src.startswith("-->", i):
+                raise ValueError("an HTML-style comment (-->) in code position cannot be read - remove it (write `a-- > b` with the operator spaced)")
             if c in ("'", '"', "`"):
                 state = c; out.append(c); prev, last, word = last, c, ""; i += 1; continue        # keep the quote itself (to track literal positions)
             if stack:
@@ -205,12 +228,14 @@ def blank_strings_and_comments(src):
                         stack.pop(); state = "`"; out.append("}"); prev, last, word = last, "}", ""; i += 1; continue
                     stack[-1] -= 1
             if c == "(":
-                parens.append(word in CONTROL_WORDS)
+                parens.append((word in CONTROL_WORDS and kw_ok) or (word == "await" and prev_word == "for"))
             elif c == ")":
                 ctrl_close = parens.pop() if parens else False
             if c not in " \t\r\n":
                 prev, last = last, c
                 if c.isalnum() or c in "_$":
+                    if not word_open:
+                        prev_word, kw_ok = word, prev != "."   # a new word: remember the one before it, and whether this one follows a dot
                     word = (word + c) if word_open else c
                     word_open = True
                 else:
@@ -896,8 +921,6 @@ def _self_test():
          wf("const FLEET = Math.round(budget.remaining()/1000)\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
         ("division after a parenthesized expression and after `]` → pass",
          wf("const h = (a + b) / 2\nconst k = xs[0] / 3\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
-        ("division followed by a string with a slash on the same line → pass (division is read as division)",
-         wf("const n = total / 2; const u = 'a/b'\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
         ("division, a string and a trailing comment on one line → pass",
          wf("const pct = done / total + '%' // progress\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
         ("two divisions around a string → pass",
@@ -910,6 +933,25 @@ def _self_test():
          wf("const a = await agent('p', {model: 'opus', effort: 'high', 'eff\\\nort': 'max'})"), True, "escape sequence"),
         ("an HTML-style comment opener in code position → deny",
          wf("<!-- /*\nconst r = await agent('p', {model: 'haiku', effort: 'max'})\n*/ return r"), True, "HTML-style"),
+        # review round 3: contexts the paren stack missed, and the safety net that makes a misread context harmless
+        ("a regex after a for-await header → deny (regex literal)",
+         wf("for await (const x of xs) /'/.test(x); const r = await agent('p', {model: 'haiku', effort: 'max'}); for await (const y of ys) /'/.test(y)"), True, "regex literal"),
+        ("a regex after extends → deny (regex literal)",
+         wf("class A extends /'/.constructor {}; const r = await agent('p', {model: 'haiku', effort: 'max'}); class B extends /'/.constructor {}"), True, "regex literal"),
+        ("a regex after a unary plus (1 + +/'/) → caught by the safety net (unpaired quote before the next slash)",
+         wf("const n = 1 + +/'/.source.length; const r = await agent('p', {model: 'haiku', effort: 'max'}); const m = 1 + +/'/.source.length"), True, "unpaired quote"),
+        ("a misread regex that ends in // (safety net: comment opener glued to a word) → deny",
+         wf("const n = 1 + +/a//1; const r = await agent('p', {model: 'haiku', effort: 'max'})\nreturn r"), True, "glued to a word"),
+        ("--> after a block comment that spans lines → deny (HTML-style)",
+         wf("const a = 1 /*\n*/ --> `\nconst r = await agent('p', {model: 'haiku', effort: 'max'})\n`"), True, "HTML-style"),
+        ("property names are not keywords: cfg.default / 2 and arr.with(0, 1) / 2 → pass",
+         wf("const h = cfg.default / 2\nconst k = arr.with(0, 1) / 2\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
+        ("division followed by a spaced trailing comment → pass",
+         wf("const half = n / 2 // half of n\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
+        ("division followed by a comment glued to a digit (x/2//c) → deny (put a space before the comment)",
+         wf("const half = x/2//c\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), True, "glued to a word"),
+        ("division, an unpaired quote and a second slash on one line → deny (split the line)",
+         wf("const n = total / 2; const u = 'a/b'\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), True, "unpaired quote"),
         ("division followed by a string without a slash → pass",
          wf("const t = total / count + ' items'\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
         ("CRLF line continuation inside a string → pass",
