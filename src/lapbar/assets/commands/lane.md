@@ -16,7 +16,7 @@
 | 레인 종류 | 모델 (리터럴, hook 이 지킴) | 쓰는 자리 |
 |---|---|---|
 | read | opus high, review-readonly | 읽기, 대조, 리뷰, 설계 비교 (hook GUIDE 의 judge·critic xhigh 는 최종 판정자 자리 - 다른 뜻이라 이름을 read 로) |
-| collect | sonnet low (Bash 있음). 부모가 기계 검증 (재집계, lint, grep 0건) 할 수 있는 집계·정리는 haiku medium + `[haiku role: …]` `[verify: …]` 표지 | 수집, 파싱, 형식 변환. 셸 실측은 **prompt 에 [허용 명령] 목록이 있을 때만** 그 안에서 (rule subagent-review [실측은 허용 명령을 명시한 sonnet 1개 레인]), staging 실측 레인은 1개까지, 쓰기는 prompt 에 적은 경로 (보통 `~/tmp/<프로젝트>-<MMDD>/`) 만, 사인 항목 (push, 운영 DB 쓰기, 배포, 재시작) 금지 |
+| collect | sonnet low (Bash 있음). 부모가 기계 검증 (재집계, lint, grep 0건) 할 수 있는 집계·정리는 haiku medium + `[haiku role: …]` `[verify: …]` 표지 (역할 모드 env `SUBAGENT_HAIKU_ROLE_MODE=role` 일 때만. `lane-workflow.js` 템플릿은 collect 를 sonnet 으로 고정하니 haiku 레인은 단건 Agent 나 템플릿 복사본으로) | 수집, 파싱, 형식 변환. 셸 실측은 **prompt 에 [허용 명령] 목록이 있을 때만** 그 안에서 (rule subagent-review [실측은 허용 명령을 명시한 sonnet 1개 레인]), staging 실측 레인은 1개까지, 쓰기는 prompt 에 적은 경로 (보통 `~/tmp/<프로젝트>-<MMDD>/`) 만, 사인 항목 (push, 운영 DB 쓰기, 배포, 재시작) 금지 |
 | refute | opus xhigh, review-readonly | 지적별 반증 (틀렸다고 가정하고 근거 찾기), 결과 = verdicts |
 | fable 레인 | 없음 | 필요하면 템플릿 복사본에 `[owner-approved: fable]` 표지, 호출 2곳까지 |
 - 호출 = `Workflow({ scriptPath: "~/.claude/scripts/lane-workflow.js", args: { approval, context, lanes: [{key, kind: 'read'|'collect'|'refute', prompt, schema?}, ...], synth: true|false, signedOverBudget?: "[owner-approved: agent N]" } })`. 합계 agent ≤ 10 (레인 + 취합 1) - 넘기면 스크립트가 throw 하니 **돌리기 전에** 사용자 사인을 받고 `signedOverBudget` 을 넣는다. kind 오타는 throw. ultracode 가 꺼진 세션에선 `/lane` 호출이 Workflow opt-in 이고, 크기와 상관없이 [레인 N (read a, collect b, refute c), 취합 유무] 를 한 줄로 예고하고 간다.

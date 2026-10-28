@@ -21,14 +21,16 @@ Check rules:
      inside the parentheses counts too). The model could write the mark itself; that limit is known, and writing a mark
      without owner approval is treated as a rule violation.
   5. effort is a lowercase literal from EFFORTS. Levels above the cap EFFORT_CAP (default xhigh, set with env
-     SUBAGENT_EFFORT_CAP - put it in settings.json env to cover every session) need a `[owner-approved: <level>]` mark
+     SUBAGENT_EFFORT_CAP - put it in settings.json env to cover every session) need a `[<owner>-approved: <level>]` mark
      inside that call.
   6. opts must be **one flat object literal** - an object chosen by a ternary (`c ? {…} : {…}`), spread (`...`), computed
      keys (`['effort']`), get/set, and identifier escapes get a shape deny (bypasses where a later value overrides the
      earlier literal). Shorthand (`{effort}`) is reported as [a variable].
-  7. fail-closed: a regex literal (a `/` after an operator, an opening bracket, a line start or a keyword such as return -
-     its quotes can pair up with a later regex and hide an agent() in between), a newline inside a quoted string (a JS
-     syntax error; the same hiding trick across lines), an unclosed string or comment, an unreadable scriptPath, and
+  7. fail-closed: a regex literal (a `/` after an operator, an opening bracket, the start of the script or a keyword such
+     as return - its quotes can pair up with a later regex and hide an agent() in between), a `/` that could be division
+     or a regex (after `)`, `]`, `...` or an identifier) when a quote and another `/` follow on the same line (the same
+     pairing trick; move the string or the division to its own line), a newline inside a quoted string (a JS syntax
+     error; the same hiding trick across lines), an unclosed string or comment, an unreadable scriptPath, and
      internal hook exceptions are all denied. A call by saved workflow name looks up `~/.claude/workflows/<name>.js`
      and `<cwd>/.claude/workflows/<name>.js` and checks it; if neither exists (built in) it passes.
   8. deny text = reason + where to fix + one short GUIDE line. Detailed rules live in rules/subagent-review.md.
@@ -53,7 +55,7 @@ GUIDE = (
     "Rules: model is an opus / sonnet literal (no omission, inherit, or variables). "
     "Single Agent = opus, Workflow agent() = opus, mechanical collection/parsing = sonnet. "
     "fable only when the owner approved it for that task - a '[<owner>-approved: fable]' mark inside that call (up to 2 sites per workflow), "
-    "haiku also only with a '[<owner>-approved: haiku]' mark (role mode: a '[haiku role: …]' plus a '[verify: …]' mark, effort medium/high). "
+    "haiku also only with a '[<owner>-approved: haiku]' mark (role mode, env SUBAGENT_HAIKU_ROLE_MODE=role: a '[haiku role: …]' plus a '[verify: …]' mark, effort medium/high). "
     "effort is a literal too (low/medium/high/xhigh, max needs a '[<owner>-approved: max]' mark - work agents high, mechanical collection low, judge/critic xhigh. omitted = inherits the session effort). "
     "<owner> = env SUBAGENT_GUARD_OWNER, default 'owner'. "
     "Limits differ by plan, so check /usage first. Details = ~/.claude/rules/subagent-review.md"
@@ -80,6 +82,7 @@ LITERAL = re.compile(r"""\s*(['"`])([A-Za-z0-9_.\-]+)\1""")         # string lit
 REGEX_PREV = set("(,=:[!&|?{};+-*%<>~^")                            # a `/` after one of these is a regex literal, not division
 REGEX_KEYWORDS = {"return", "typeof", "case", "in", "of", "void", "delete", "instanceof", "new", "throw", "yield", "await", "else", "do"}  # a `/` after one of these words is a regex too
 OPT_KEYS = ("model", "effort")                                       # keys that must be literals at the top level of agent() opts
+QUOTED_KEY = re.compile(r"""(['"`])( *)\1\s*:""")                    # a quoted key in the blanked code (its content is spaces of the same length)
 
 
 def owner():
@@ -115,8 +118,8 @@ def deny(reason):
 
 # ----------------------------------------------------------------------------- reading the source
 
-def read_script(tool_input):
-    """(script, source, error) - script None means nothing to check (an error, if present, is the deny reason)."""
+def read_script(tool_input, cwd=None):
+    """(script, source, error) - script None means nothing to check (an error, if present, is the deny reason). cwd = the session cwd from the payload."""
     script = tool_input.get("script")
     if script:
         return script, "script", None
@@ -129,7 +132,7 @@ def read_script(tool_input):
             return None, "scriptPath", "cannot read scriptPath (%s): %s" % (e.__class__.__name__, path)
     name = tool_input.get("name")
     if name:
-        for base in (os.path.expanduser("~/.claude/workflows"), os.path.join(os.getcwd(), ".claude", "workflows")):
+        for base in (os.path.expanduser("~/.claude/workflows"), os.path.join(cwd or os.getcwd(), ".claude", "workflows")):
             p = os.path.join(base, name + ".js")
             if os.path.isfile(p):
                 try:
@@ -147,9 +150,10 @@ def blank_strings_and_comments(src):
 
     Newlines are kept so line numbers and offsets match the original 1:1. Inside a template literal, ${ … } is code
     and stays as is (nested braces are tracked). Regex literals are not parsed: a `/` after an operator, an opening
-    bracket, a line start or a keyword is treated as the start of one and raises ValueError (fail-closed). A `/` after an
-    identifier that is not a keyword counts as division; if such a regex still breaks the state, the caller denies on
-    the end state. A newline inside a ' or " string is a JS syntax error and raises ValueError too.
+    bracket, the start of the script or a keyword is treated as the start of one and raises ValueError (fail-closed). A
+    `/` after `)`, `]`, `.` or an identifier counts as division, unless a quote and another `/` follow on the same line -
+    that is how a regex with a quote inside pairs up with a later one and hides the code in between, so it raises too. A
+    newline inside a ' or " string is a JS syntax error and raises ValueError as well.
     """
     out = []
     n = len(src)
@@ -173,6 +177,15 @@ def blank_strings_and_comments(src):
                 # start of a regex literal - a quote inside it opens string state, and when the next regex closes that
                 # state again, every agent() in between is blanked and escapes the check. Fail closed instead.
                 raise ValueError("a regex literal (/…/) cannot be read by the hook - switch to new RegExp('…')")
+            if c == "/":
+                # division as far as the hook can tell, but `if (x) /'/.test(s)` looks the same: when a quote and another
+                # `/` follow on this line, the quote may belong to a regex that pairs with a later one and hides the code between
+                eol = src.find("\n", i + 1)
+                rest = src[i + 1: n if eol == -1 else eol]
+                next_slash = rest.find("/")
+                if next_slash != -1 and any(q in rest[:next_slash] for q in ("'", '"', "`")):
+                    raise ValueError("a `/` that could be division or a regex literal is followed by a quote and another `/` on the same line - "
+                                     "the hook cannot tell them apart; move the string or the division to its own line, or use new RegExp('…')")
             if c in ("'", '"', "`"):
                 state = c; out.append(c); prev, last, word = last, c, ""; i += 1; continue        # keep the quote itself (to track literal positions)
             if stack:
@@ -204,6 +217,8 @@ def blank_strings_and_comments(src):
             out.append(c if c == "\n" else " "); i += 1; continue
         # string states (' " `)
         if c == "\\":
+            if nxt == "\r" and src[i + 2:i + 3] == "\n":
+                out.append("  \n"); i += 3; continue                       # CRLF line continuation inside a string
             out.append(" "); out.append("\n" if nxt == "\n" else " "); i += 2; continue
         if state == "`" and c == "$" and nxt == "{":
             stack.append(0); state = "code"; out.append("${"); prev, last, word = last, "{", ""; i += 2; continue
@@ -216,7 +231,7 @@ def blank_strings_and_comments(src):
     return "".join(out), state
 
 
-_DEPTH_CACHE = {}   # text -> (brace, paren, bracket) depth per prefix length. Recounting per character is quadratic: a 10 KB schema took 17 seconds
+_DEPTH_CACHE = {}   # text -> (brace, paren, bracket) depth per prefix length. Recounting per character is quadratic: a 1500-key (about 30 KB) schema took 17 seconds
 
 
 def _depth_table(text):
@@ -260,6 +275,14 @@ def _literal_value(code, raw, pos):
     return m.group(2)
 
 
+def _after_separator(text, idx):
+    """True when the first non-blank character before text[idx] is `{` or `,` - a key position. `c ? model : 'x'` is not one."""
+    j = idx - 1
+    while j >= 0 and text[j] in " \t\r\n":
+        j -= 1
+    return j >= 0 and text[j] in "{,"
+
+
 def _opt_literal(code, script, start, end, key):
     """Value of the **top-level** `key:` (or 'key':) of opts inside the agent() parentheses (code[start:end]) -> (status, value), status in missing | expr | ok.
 
@@ -272,10 +295,11 @@ def _opt_literal(code, script, start, end, key):
     shorthand = re.compile(r"(?<![\w.$])%s\s*[,}]" % key)          # {effort} = the variable effort passed under its own name
     ends = []
     for km in bare.finditer(args):
-        if _depths_at(args, km.start()) == (1, 0, 0):
+        if _depths_at(args, km.start()) == (1, 0, 0) and _after_separator(args, km.start()):
             ends.append(km.end())
     for qm in quoted.finditer(args):
-        if script[start + qm.start() + 1: start + qm.start() + 1 + len(key)] == key and _depths_at(args, qm.start()) == (1, 0, 0):
+        if (script[start + qm.start() + 1: start + qm.start() + 1 + len(key)] == key and _depths_at(args, qm.start()) == (1, 0, 0)
+                and _after_separator(args, qm.start())):
             ends.append(qm.end())
     if not ends:
         for sm in shorthand.finditer(args):
@@ -288,7 +312,7 @@ def _opt_literal(code, script, start, end, key):
     return "ok", val
 
 
-def _opts_shape(code, start, end):
+def _opts_shape(code, script, start, end):
     """If the opts inside the agent() parentheses is not **one flat object literal**, return the reason, else None.
 
     Every form where the runtime value could differ from the literal the hook read is rejected (fail-closed): more than one top-level object literal (c ? {…} : {…}),
@@ -334,6 +358,12 @@ def _opts_shape(code, start, end):
                 return "a computed key (['effort']) cannot be read"
     if re.search(r"(?<![\w.$])(get|set)\s+[\w$]+\s*\(", body):
         return "get/set methods cannot be read"
+    raw_body = script[start + o + 1: start + close]
+    for qm in QUOTED_KEY.finditer(body):
+        if _depths_at(body, qm.start()) != (0, 0, 0):
+            continue
+        if "\\" in raw_body[qm.start() + 1: qm.start() + 1 + len(qm.group(2))]:
+            return "an escape sequence inside a quoted key ('eff\\u006frt') cannot be read"
     return None
 
 
@@ -370,7 +400,7 @@ def agent_calls(script):
         ms, mv = _opt_literal(code, script, start, end, "model")
         es, ev = _opt_literal(code, script, start, end, "effort")
         calls.append({"line": line, "model": mv, "status": ms, "effort": ev, "effort_status": es,
-                      "shape": _opts_shape(code, start, end), "args": script[start:end]})
+                      "shape": _opts_shape(code, script, start, end), "args": script[start:end]})
     return calls
 
 
@@ -419,6 +449,8 @@ def haiku_error(text, effort, where, fallback):
     if haiku_mark() in text:
         return None
     if not haiku_role_mode():
+        if HAIKU_ROLE_RE.search(text) or HAIKU_VERIFY_RE.search(text):
+            return fallback + " (role marks found, but role mode is off - set env %s=role in settings.json to use them)" % HAIKU_ROLE_MODE_ENV
         return fallback
     missing = []
     if not HAIKU_ROLE_RE.search(text):
@@ -428,7 +460,7 @@ def haiku_error(text, effort, where, fallback):
     if missing:
         return (where + ": haiku is only for roles with a mechanical check. Put " + " and ".join(missing)
                 + " inside that call; otherwise use sonnet")
-    v = str(effort or "").strip()
+    v = str(effort or "").strip().lower()
     if v in EFFORTS and EFFORTS.index(v) < EFFORTS.index(HAIKU_EFFORT_MIN):
         return where + ": a haiku role needs effort medium or higher - use 'medium' instead of '%s'" % v
     if v in EFFORTS and EFFORTS.index(v) > EFFORTS.index(HAIKU_EFFORT_MAX):
@@ -449,7 +481,7 @@ def effort_error(effort, text, where):
         return where + ": effort '%s' is not in the allow list (%s)" % (v, "/".join(EFFORTS))
     cap = effort_cap()
     if EFFORTS.index(v) > EFFORTS.index(cap) and effort_mark(v) not in (text or ""):
-        return (where + ": effort '%s' is above the cap '%s'. If %s approved it for that task, put a '%s' mark inside that call; otherwise use '%s' or lower. "
+        return (where + ": effort '%s' is above the cap '%s'. If it carries %s approval for that task, put a '%s' mark inside that call; otherwise use '%s' or lower. "
                 "(set the cap with env SUBAGENT_EFFORT_CAP)" % (v, cap, owner(), effort_mark(v), cap))
     return None
 
@@ -481,7 +513,7 @@ def decide(payload):
         return None
 
     if tool == "Workflow":
-        script, source, err = read_script(tool_input)
+        script, source, err = read_script(tool_input, payload.get("cwd"))
         if err:
             return "Workflow " + err + ". Check the path and call again. " + GUIDE
         if not script:
@@ -739,11 +771,11 @@ def _self_test():
                   {"tool_name": "Workflow", "tool_input": {"scriptPath": tmp}}, True, "scriptPath"))
     cases.append(("scriptPath unreadable → deny (fail-closed)",
                   {"tool_name": "Workflow", "tool_input": {"scriptPath": tmp + ".nope"}}, True, "cannot read"))
-    for token in ("fable", "opus", "sonnet", "haiku", "effort", "omit", "/usage", "role", OWNER_ENV):
+    for token in ("fable", "opus", "sonnet", "haiku", "effort", "omit", "/usage", "role", OWNER_ENV, HAIKU_ROLE_MODE_ENV):
         if token not in GUIDE:
             print("FAIL - GUIDE text is missing %r" % token)
             sys.exit(1)
-    print("PASS - GUIDE text has all 9 tokens (fable/opus/sonnet/haiku/effort/omit//usage/role/owner env), length %d chars" % len(GUIDE))
+    print("PASS - GUIDE text has all 10 tokens (fable/opus/sonnet/haiku/effort/omit//usage/role/owner env/role env), length %d chars" % len(GUIDE))
     failed = 0
 
     def run(name, payload, expect_deny, must_contain):
@@ -790,6 +822,10 @@ def _self_test():
          {"tool_name": "Agent", "tool_input": {"prompt": R + "x", "model": "haiku", "effort": "medium"}}, True, "to use haiku"),
         ("SUBAGENT_HAIKU_ROLE_MODE=bogus: role marks only → deny (treated as off)",
          wf("const a = await agent('p', {label: '" + R + "aggregate', model: 'haiku', effort: 'medium'})"), True, "haiku agent() (line 1) is allowed only"),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Agent haiku role+verify, effort 'Low' (uppercase) → deny on the range, not only on the case",
+         {"tool_name": "Agent", "tool_input": {"prompt": R + "x", "model": "haiku", "effort": "Low"}}, True, "medium or higher"),
+        ("SUBAGENT_HAIKU_ROLE_MODE=off: role marks present → the deny names the env that turns role mode on",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[haiku role: lint] [verify: lint 0 hits] x", "model": "haiku", "effort": "medium"}}, True, "role mode is off"),
     ]
     # owner name env SUBAGENT_GUARD_OWNER - the marks change with it
     owner_cases = [
@@ -826,6 +862,25 @@ def _self_test():
          wf("const avg = total / count\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
         ("a quoted string broken across lines → deny (syntax error, fail-closed)",
          wf("const s = 'abc\ndef'\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), True, "cannot be parsed"),
+        # review round 1: ternary and escaped keys, regex after `)` or `...`, CRLF continuation
+        ("`c ? model : 'opus'` inside a label is not the model key → the real haiku is seen → deny",
+         wf("const model = 1\nconst a = await agent('p', {model: 'haiku', effort: 'high', label: c ? model : 'opus'})"), True, "is allowed only"),
+        ("`c ? 'effort' : 'high'` inside a label is not the effort key → the real max is seen → deny",
+         wf("const a = await agent('p', {model: 'opus', effort: 'max', label: c ? 'effort' : 'high'})"), True, "above the cap"),
+        ("a unicode escape inside a quoted key ('eff\\u006frt' overrides effort at runtime) → shape deny",
+         wf("const a = await agent('p', {model: 'opus', effort: 'high', 'eff\\u006frt': 'max'})"), True, "escape sequence"),
+        ("a regex after `)` whose quote pairs with a later regex on one line → deny",
+         wf("if (a) /'/.test(s); const r = await agent('p', {model: 'haiku', effort: 'max'}); if (b) /'/.test(t)"), True, "cannot be parsed"),
+        ("a regex after a spread (...) whose quote pairs with a later regex → deny",
+         wf("const xs = [.../'/.source]; const r = await agent('p', {model: 'haiku', effort: 'max'}); const ys = [.../'/.source]"), True, "cannot be parsed"),
+        ("division followed by a string with a slash on the same line → deny (ambiguous, split the line)",
+         wf("const n = total / 2; const u = 'a/b'\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), True, "cannot be parsed"),
+        ("the same division and string on separate lines → pass",
+         wf("const n = total / 2\nconst u = 'a/b'\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
+        ("division followed by a string without a slash → pass",
+         wf("const t = total / count + ' items'\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
+        ("CRLF line continuation inside a string → pass",
+         wf("const s = 'ab\\\r\ncd'\r\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
     ]
     saved_cap = os.environ.pop("SUBAGENT_EFFORT_CAP", None)   # run with the default cap (the caller's values are restored at the very end)
     saved_role = os.environ.pop(HAIKU_ROLE_MODE_ENV, None)    # settings.json env may reach the shell too - run with role mode off
@@ -859,13 +914,14 @@ def _self_test():
     if saved_role is not None:
         os.environ[HAIKU_ROLE_MODE_ENV] = saved_role
     try:
-        _st = json.load(open(os.path.expanduser("~/.claude/settings.json"), encoding="utf-8"))
+        _settings = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "settings.json")   # the Claude home this hook is installed in
+        _st = json.load(open(_settings, encoding="utf-8"))
         _env = _st.get("env") or {}
-        print("settings.json env: owner=%s role_mode=%s cap=%s (what Claude Code passes to hooks - a terminal shell does not carry it)"
-              % (_env.get(OWNER_ENV) or "(unset -> default %s)" % OWNER_DEFAULT, _env.get(HAIKU_ROLE_MODE_ENV) or "(unset -> off)",
+        print("%s env: owner=%s role_mode=%s cap=%s (what Claude Code passes to hooks - a terminal shell does not carry it)"
+              % (_settings, _env.get(OWNER_ENV) or "(unset -> default %s)" % OWNER_DEFAULT, _env.get(HAIKU_ROLE_MODE_ENV) or "(unset -> off)",
                  _env.get("SUBAGENT_EFFORT_CAP") or "(unset -> %s)" % EFFORT_CAP_DEFAULT))
     except Exception as e:
-        print("settings.json not readable (%s) - skipped the env summary" % e.__class__.__name__)
+        print("settings.json next to this hook's folder not readable (%s) - skipped the env summary" % e.__class__.__name__)
     cases = cases + cap_cases + role_cases + owner_cases + review_cases + ["big-schema"]
     try:
         os.unlink(tmp)
