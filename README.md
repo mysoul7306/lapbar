@@ -38,7 +38,7 @@ The most expensive thing in Claude Code is the head model doing the legwork. Sub
 - **protected-branch push block** - `git-push-guard.py` denies pushes to develop / main / master, resolving refspec and upstream to decide, and failing closed when it can't. Merges by the AI, pushes by a human.
 - **memory hygiene** - `memory-lint-hook.py` checks the memory directory for broken links, public IPs, secrets and router size at session start.
 
-Both guards are **regex-based**: a safety net against the AI accidentally pushing or forgetting a model, not a sandbox against deliberate evasion (eval, config injection, shell tricks). Known evasion shapes are closed one by one as self-test cases (push 60, model 143), and the model guard's JS reader is checked against a real parser by a differential fuzz (`tools/fuzz/`, 0 bypasses in 60,000 scripts on this version); an AST-parser rewrite is the next milestone. What that means for `Workflow` scripts is listed in [What a Workflow script may not contain](#what-a-workflow-script-may-not-contain).
+Both guards are **regex-based**: a safety net against the AI accidentally pushing or forgetting a model, not a sandbox against deliberate evasion (eval, config injection, shell tricks). Known evasion shapes are closed one by one as self-test cases (push 60, model 153), and the model guard's JS reader is checked against a real parser by a differential fuzz (`tools/fuzz/`, 0 bypasses in 60,000 scripts on this version); an AST-parser rewrite is the next milestone. What that means for `Workflow` scripts is listed in [What a Workflow script may not contain](#what-a-workflow-script-may-not-contain).
 
 ## How much it saves
 
@@ -66,7 +66,7 @@ Measured by the person who built this harness (10 days since turning the hooks o
 
 | Kind | File | What it does |
 |---|---|---|
-| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | forces model and effort literals, top and bottom tiers need a tag (or the haiku role tags in role mode). `--self-test` 143 cases |
+| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | forces model and effort literals, top and bottom tiers need a tag (or the haiku role tags in role mode). `--self-test` 153 cases |
 | hook | `hooks/git-push-guard.py` (PreToolUse: Bash) | denies develop / main / master push, fail-closed. `--self-test` 60 cases |
 | hook | `hooks/memory-lint-hook.py` (SessionStart) + `scripts/memory-lint.py` | checks the memory directory, notifies only on problems |
 | hook | `hooks/git-readonly-guard.py` (agent-scoped PreToolUse: Bash, not wired into `settings.json`) | allowlist for read-only git inside the `scout-git` agent: pipes, redirects, write subcommands and unknown options are denied, `--no-ext-diff` is forced. `--self-test` 76 cases |
@@ -157,13 +157,14 @@ To find `agent()` calls the hook blanks strings and comments with a small state 
 | a division followed on the same line by an unpaired quote and another `/` (`n / 2; const u = 'a/b'`), or by a comment glued to a word (`x/2//c`) | the same shape as a misread regex; this is the safety net for contexts the hook cannot classify | split the line, or put a space before the comment |
 | a backslash outside strings and comments | a regex body with escaped slashes, or an identifier escape such as `\u006dodel` | `new RegExp('…')`, plain identifiers |
 | an unescaped newline or CR inside a `'` / `"` string (a `\` line continuation is fine), U+2028 / U+2029 anywhere, `<!--` or `-->` in code | JS treats these as line ends or comments, the hook would not | template literals for multi-line text, remove the separators |
+| `workflow()` whose target is not a string literal or `{scriptPath: '<literal>'}`, or `workflow` used other than as a direct call | the child script never reaches the hook as a tool call, so the hook reads the target file (a saved name under `.claude/workflows/`, or a path relative to the session cwd) and checks it the same way, up to 3 levels | a literal name or path |
 | `agent` used other than as a direct call (alias, argument, property), or reached through `eval`, `Function`, `globalThis` | call sites cannot be counted | call `agent(...)` directly |
 
 Division after an identifier, a number, `]` or a non-header `)` is read as division: `Math.round(budget.remaining()/1000)`, `done / total + '%' // progress` and `a / b + ' of ' + c / d` pass.
 
 ### Checking it
 
-`python3 ~/.claude/hooks/subagent-model-guard.py --self-test` runs 143 regression cases and prints the env values it found. `lapbar doctor` runs that self-test and three probes (missing model, valid call, haiku without a tag) against the installed copy. The hidden-call shapes found so far are listed in `CHANGELOG.md`.
+`python3 ~/.claude/hooks/subagent-model-guard.py --self-test` runs 153 regression cases and prints the env values it found. `lapbar doctor` runs that self-test and three probes (missing model, valid call, haiku without a tag) against the installed copy. The hidden-call shapes found so far are listed in `CHANGELOG.md`.
 
 ## What was removed from the public release
 

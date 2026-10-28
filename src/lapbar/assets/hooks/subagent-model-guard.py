@@ -50,6 +50,9 @@ Check rules:
      schema passes in under 2 seconds, because a hook that outruns the harness timeout is skipped, not denied.
 
 `python3 subagent-model-guard.py --self-test` = regression cases (must_contain in the self-test is reason-only text that is not in GUIDE).
+ 11. workflow('name') and workflow({scriptPath: '…'}) inside a script are followed: the target file is read and checked
+     the same way (a name that is not a saved workflow is a built-in - nothing to read). A target that is not a string
+     literal, a `workflow` alias, an unreadable file, or nesting deeper than NESTED_MAX is denied.
 """
 import json
 import os
@@ -83,6 +86,10 @@ AGENT_CALL = re.compile(r'(?<![\w$])agent\s*\(')  # x.agent( also counts as a ca
 AGENT_ALIAS = re.compile(r'(?<![\w$])agent\b(?!\s*\()')
 # Dynamic access (eval, Function, globalThis, computed property) hides call sites, so deny.
 DYNAMIC_ACCESS = re.compile(r'(?<![\w$.])(eval|Function|globalThis)\s*[(\[.]|\[\s*[\'"`]?agent[\'"`]?\s*\]')
+# workflow('name') / workflow({scriptPath: '…'}) runs another script whose agent() calls never pass through this hook, so its target is read and checked too.
+WORKFLOW_CALL = re.compile(r'(?<![\w$.])workflow\s*\(')
+WORKFLOW_ALIAS = re.compile(r'(?<![\w$.])workflow\b(?!\s*\()')
+NESTED_MAX = 3                     # workflow() nesting depth the hook follows (the runtime allows one level)
 LITERAL = re.compile(r"""\s*(['"`])([A-Za-z0-9_.\-]+)\1""")         # string literal in a value position
 REGEX_PREV = set("(,=:[!&|?{};+-*%<>~^.")                           # a `/` after one of these is a regex literal, not division (`.` = after a spread)
 REGEX_KEYWORDS = {"return", "typeof", "case", "in", "of", "void", "delete", "instanceof", "new", "throw", "yield", "await", "else", "do", "default",
@@ -321,16 +328,11 @@ def _after_separator(text, idx):
     return j >= 0 and text[j] in "{,"
 
 
-def _opt_literal(code, script, start, end, key):
-    """Value of the **top-level** `key:` (or 'key':) of opts inside the agent() parentheses (code[start:end]) -> (status, value), status in missing | expr | ok.
-
-    Top level = brace depth 1, paren and bracket depth 0. The same key in nested objects or nested calls is ignored (= missing). If the key repeats, the last one wins, as in JS.
-    A quoted key looks like `'     ':` (spaces as long as the key) in the blanked code, so the name is confirmed in the original.
-    """
+def _key_ends(code, script, start, end, key):
+    """End offsets (relative to start) of every top-level `key:` / 'key': inside code[start:end] - brace depth 1, paren and bracket depth 0, right after `{` or `,`."""
     args = code[start:end]
     bare = re.compile(r"(?<![\w.$])%s\s*:" % key)                 # $effort: and o.effort : are not this key
     quoted = re.compile(r"""(['"`])\s{%d}\1\s*:""" % len(key))
-    shorthand = re.compile(r"(?<![\w.$])%s\s*[,}]" % key)          # {effort} = the variable effort passed under its own name
     ends = []
     for km in bare.finditer(args):
         if _depths_at(args, km.start()) == (1, 0, 0) and _after_separator(args, km.start()):
@@ -339,6 +341,45 @@ def _opt_literal(code, script, start, end, key):
         if (script[start + qm.start() + 1: start + qm.start() + 1 + len(key)] == key and _depths_at(args, qm.start()) == (1, 0, 0)
                 and _after_separator(args, qm.start())):
             ends.append(qm.end())
+    return ends
+
+
+def _raw_string(code, script, pos):
+    """The ' / " / ` literal that starts at pos in the blanked code (blanks skipped), with no escape and no ${} -> (value, end after the quote), else (None, pos)."""
+    q = pos
+    while q < len(code) and code[q] in " \t\r\n":
+        q += 1
+    if q >= len(code) or code[q] not in "'\"`":
+        return None, pos
+    close = code.find(code[q], q + 1)
+    if close < 0 or code[q + 1:close].strip(" ") or "\\" in script[q + 1:close]:   # blanked content is spaces; a newline, ${ or a backslash leaves other characters
+        return None, pos
+    return script[q + 1:close], close + 1
+
+
+def _key_raw_string(code, script, start, end, key):
+    """(status, value) of a top-level key whose value must be one plain string literal (paths, names) - status in ok | missing | not a string literal."""
+    ends = _key_ends(code, script, start, end, key)
+    if not ends:
+        return "missing", None
+    value, vend = _raw_string(code, script, start + max(ends))
+    if value is None:
+        return "not a string literal", None
+    tail = code[vend:end].lstrip()
+    if tail and tail[0] not in ",}":
+        return "not a string literal", None
+    return "ok", value
+
+
+def _opt_literal(code, script, start, end, key):
+    """Value of the **top-level** `key:` (or 'key':) of opts inside the agent() parentheses (code[start:end]) -> (status, value), status in missing | expr | ok.
+
+    Top level = brace depth 1, paren and bracket depth 0. The same key in nested objects or nested calls is ignored (= missing). If the key repeats, the last one wins, as in JS.
+    A quoted key looks like `'     ':` (spaces as long as the key) in the blanked code, so the name is confirmed in the original.
+    """
+    args = code[start:end]
+    shorthand = re.compile(r"(?<![\w.$])%s\s*[,}]" % key)          # {effort} = the variable effort passed under its own name
+    ends = _key_ends(code, script, start, end, key)
     if not ends:
         for sm in shorthand.finditer(args):
             if _depths_at(args, sm.start()) == (1, 0, 0):
@@ -448,6 +489,59 @@ def agent_calls_without_model(script):
     return len(calls), [c["line"] for c in calls if c["status"] == "missing"]
 
 
+def _paren_end(code, start):
+    """Index of the `)` that closes the call whose `(` ends right before start (len(code) when unbalanced)."""
+    depth, j = 1, start
+    while j < len(code) and depth:
+        ch = code[j]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        j += 1
+    return j - 1 if depth == 0 else len(code)
+
+
+def nested_workflow_scripts(script, cwd):
+    """[(label, text)] for each workflow('name') / workflow({scriptPath: '…'}) call in script - the child scripts this hook never sees as tool calls.
+
+    Raises ValueError when a target cannot be read statically (non-literal target, workflow alias, unreadable file). A name that is not a saved
+    workflow is a built-in - nothing to read, like the Workflow tool's own name parameter.
+    """
+    code, _ = blank_strings_and_comments(script)
+    alias = WORKFLOW_ALIAS.search(code)
+    if alias:
+        raise ValueError("workflow is used somewhere other than a call (alias, argument, property) (line %d) - write workflow(...) directly"
+                         % (code.count("\n", 0, alias.start()) + 1))
+    found = []
+    for m in WORKFLOW_CALL.finditer(code):
+        start, line = m.end(), code.count("\n", 0, m.start()) + 1
+        end = _paren_end(code, start)
+        value, _ = _raw_string(code, script, start)
+        if value is not None:
+            text, _, err = read_script({"name": value}, cwd)
+            label = "workflow('%s')" % value
+        else:
+            q = start
+            while q < end and code[q] in " \t\r\n":
+                q += 1
+            if q >= end or code[q] != "{":
+                raise ValueError("workflow() target (line %d) is not a string literal or an object literal with a literal scriptPath - "
+                                 "the hook cannot tell which script will run" % line)
+            status, path = _key_raw_string(code, script, start, end, "scriptPath")
+            if status != "ok":
+                raise ValueError("workflow() scriptPath (line %d) is %s - write the path as one plain string literal" % (line, status))
+            if not os.path.isabs(path):
+                path = os.path.join(cwd or os.getcwd(), path)
+            text, _, err = read_script({"scriptPath": path}, cwd)
+            label = "workflow(%s)" % path
+        if err:
+            raise ValueError("%s: %s" % (label, err))
+        if text is not None:
+            found.append((label, text))
+    return found
+
+
 # ----------------------------------------------------------------------------- decision
 
 def classify(model):
@@ -533,6 +627,9 @@ def decide(payload):
         model = tool_input.get("model")
         if not model:
             return tool + " call has no model. The parent model would be inherited as is; call again with model set. " + GUIDE
+        if not isinstance(model, str) or not isinstance(tool_input.get("prompt", ""), str):
+            return tool + " call: model and prompt must be strings (got %s / %s) - the hook cannot read other shapes. " % (
+                type(model).__name__, type(tool_input.get("prompt", "")).__name__) + GUIDE
         tier, err = classify(model)
         if err:
             return tool + ": " + err + ". " + GUIDE
@@ -556,6 +653,14 @@ def decide(payload):
             return "Workflow " + err + ". Check the path and call again. " + GUIDE
         if not script:
             return None  # built-in workflows etc. - nothing to check
+        return check_script(script, source, payload.get("cwd"), 0)
+
+    return None
+
+
+def check_script(script, source, cwd, depth):
+    """Rejection reason for one Workflow script (and, through nested_workflow_scripts, the scripts it runs with workflow()) or None."""
+    if True:
         try:
             calls = agent_calls(script)
         except ValueError as e:
@@ -609,14 +714,23 @@ def decide(payload):
             err = effort_error(c["effort"], c["args"], "Workflow agent() line %d" % c["line"])
             if err:
                 return err + " " + GUIDE
+        try:
+            nested = nested_workflow_scripts(script, cwd)
+        except ValueError as e:
+            return "Workflow nested workflow() (%s): %s. " % (source, e) + GUIDE
+        if nested and depth + 1 >= NESTED_MAX:
+            return "Workflow nests workflow() %d levels deep (%s) - the hook follows at most %d; flatten the scripts. " % (depth + 1, source, NESTED_MAX) + GUIDE
+        for label, text in nested:
+            err = check_script(text, "nested " + label, cwd, depth + 1)
+            if err:
+                return "Workflow nested %s: %s" % (label, err)
         return None
-
-    return None
 
 
 # ----------------------------------------------------------------------------- self-test
 
 def _self_test():
+    import shutil
     import tempfile
 
     def wf(script):
@@ -632,6 +746,10 @@ def _self_test():
          {"tool_name": "Task", "tool_input": {"prompt": "x", "effort": "high"}}, True, "Task call has no model"),
         ("Task with model → pass",
          {"tool_name": "Task", "tool_input": {"prompt": "x", "model": "sonnet", "effort": "low"}}, False, None),
+        ("Agent model given as a list → deny (not a string)",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": ["opus"], "effort": "high"}}, True, "must be strings"),
+        ("Agent prompt given as a list with a haiku mark inside → deny (not a string)",
+         {"tool_name": "Agent", "tool_input": {"prompt": ["[owner-approved: haiku]"], "model": "haiku", "effort": "high"}}, True, "must be strings"),
         ("Workflow with model on both calls → pass",
          wf("const a = await agent('p', {model: 'opus', effort: 'high'})\nconst b = await agent('q', { label: 'x', model: 'sonnet', effort: 'low' })"),
          False, None),
@@ -809,6 +927,29 @@ def _self_test():
                   {"tool_name": "Workflow", "tool_input": {"scriptPath": tmp}}, True, "scriptPath"))
     cases.append(("scriptPath unreadable → deny (fail-closed)",
                   {"tool_name": "Workflow", "tool_input": {"scriptPath": tmp + ".nope"}}, True, "cannot read"))
+    # nested workflow() targets (found by the round-4 candidate run, 2026-10-28): the child script never reaches this hook as a tool call
+    nest = tempfile.mkdtemp(prefix="guard-nest-")
+    os.makedirs(os.path.join(nest, ".claude", "workflows"))
+    with open(os.path.join(nest, ".claude", "workflows", "child-haiku.js"), "w", encoding="utf-8") as fh:
+        fh.write("const a = await agent('p', {model: 'haiku', effort: 'max'})\n")
+    with open(os.path.join(nest, "child-good.js"), "w", encoding="utf-8") as fh:
+        fh.write("const a = await agent('p', {model: 'sonnet', effort: 'low'})\n")
+    with open(os.path.join(nest, "child-nests.js"), "w", encoding="utf-8") as fh:
+        fh.write("const a = await workflow('child-haiku')\n")
+
+    def nested(script):
+        return {"tool_name": "Workflow", "tool_input": {"script": script}, "cwd": nest}
+
+    cases += [
+        ("nested workflow('name') whose saved script uses haiku → deny", nested("const r = await workflow('child-haiku')"), True, "nested workflow('child-haiku')"),
+        ("nested workflow({scriptPath}) relative to cwd, child good → pass", nested("const r = await workflow({scriptPath: 'child-good.js'})"), False, None),
+        ("nested workflow({scriptPath}) whose child nests a haiku grandchild → deny", nested("const r = await workflow({scriptPath: 'child-nests.js'})"), True, "nested workflow('child-haiku')"),
+        ("nested workflow(variable) → deny (target unknown)", nested("const r = await workflow(name)"), True, "workflow() target"),
+        ("nested workflow({scriptPath: template with ${}}) → deny", nested("const r = await workflow({scriptPath: `${dir}/x.js`})"), True, "scriptPath (line"),
+        ("nested workflow('unknown-name') → pass (built-in or absent, nothing to read)", nested("const r = await workflow('no-such-saved-workflow')"), False, None),
+        ("workflow alias → deny", nested("const w = workflow\nawait w('child-good')"), True, "workflow is used somewhere other than a call"),
+        ("nested scriptPath unreadable → deny", nested("const r = await workflow({scriptPath: 'missing.js'})"), True, "cannot read"),
+    ]
     for token in ("fable", "opus", "sonnet", "haiku", "effort", "omit", "/usage", "role", OWNER_ENV, HAIKU_ROLE_MODE_ENV):
         if token not in GUIDE:
             print("FAIL - GUIDE text is missing %r" % token)
@@ -1006,6 +1147,7 @@ def _self_test():
     cases = cases + cap_cases + role_cases + owner_cases + review_cases + ["big-schema"]
     try:
         os.unlink(tmp)
+        shutil.rmtree(nest, ignore_errors=True)
     except OSError:
         pass
     print("self-test: %d/%d PASS" % (len(cases) - failed, len(cases)))
