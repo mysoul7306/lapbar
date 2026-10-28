@@ -15,4 +15,4 @@ to deny, hook denies - the fail-closed constructs listed in the README), `syntax
 and writes the examples to `run-bypass.json`, `run-fp.json`, `run-syntaxpass.json`. Run it against an older hook as a control: the
 harness is only trusted when it finds the shapes that older version was known to miss.
 
-2026-10-28, 60,000 scripts (seeds 1 and 2): 0 bypasses on 0.1.2, 1,364 on 0.1.1.
+2026-10-28, 60,000 scripts (seeds 1 and 2): 0 bypasses on 0.2.0, 1,364 on 0.1.1.

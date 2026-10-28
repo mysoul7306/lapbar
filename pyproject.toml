@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lapbar"
-version = "0.1.2"
+version = "0.2.0"
 description = "Claude Code harness installer and cost-savings report: force cheap hands under an expensive head"
 readme = "README.md"
 license = "MIT"
