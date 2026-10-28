@@ -411,7 +411,7 @@ def agent_calls(script):
     model and effort are read only from the **top-level** keys of opts (the second argument object) (_opt_literal). shape is the rejection reason from _opts_shape (None if none).
     """
     code, end_state = blank_strings_and_comments(script)
-    if end_state != "code":
+    if end_state not in ("code", "line"):            # a // comment may run to the end of the script (JS closes it at EOF)
         raise ValueError("unclosed string or comment - if it is a regex literal (/[/*]/ and similar), switch to new RegExp('…')")
     dyn = DYNAMIC_ACCESS.search(code)
     if dyn:
@@ -954,6 +954,8 @@ def _self_test():
          wf("const n = total / 2; const u = 'a/b'\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), True, "unpaired quote"),
         ("division followed by a string without a slash → pass",
          wf("const t = total / count + ' items'\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
+        ("a // comment that runs to the end of the script with no final newline → pass (found by the acorn differential fuzz)",
+         wf("const r = await agent('p', {model: 'opus', effort: 'high'}) // done"), False, None),
         ("CRLF line continuation inside a string → pass",
          wf("const s = 'ab\\\r\ncd'\r\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
         ("a regex after `)` with escaped slashes opens a line comment that hides the rest of the line → deny (backslash in code)",

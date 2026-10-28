@@ -38,7 +38,7 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 - **보호 브랜치 push 차단** - `git-push-guard.py` 가 develop / main / master 로 가는 push 를 refspec, upstream 까지 풀어 판정하고 못 풀면 fail-closed 로 막는다. 머지는 AI 가, push 는 사람이.
 - **메모리 위생** - `memory-lint-hook.py` 가 세션 시작 때 메모리 디렉토리의 깨진 링크, 공인 IP, 비밀값, 라우터 크기를 점검한다.
 
-두 가드는 **정규식 기반** 이다 - AI 가 실수로 push 하거나 model 을 빠뜨리는 걸 막는 안전장치이지, 작정한 우회 (eval, 설정 주입, 셸 트릭) 를 전부 막는 샌드박스가 아니다. 알려진 우회 꼴은 self-test 케이스로 하나씩 닫고 있고 (push 60, model 142), AST 파서 전환은 다음 판 과제. 그래서 `Workflow` 스크립트에 쓰면 안 되는 것은 [Workflow 스크립트에 쓰면 안 되는 것](#workflow-스크립트에-쓰면-안-되는-것) 에 모아 두었다.
+두 가드는 **정규식 기반** 이다 - AI 가 실수로 push 하거나 model 을 빠뜨리는 걸 막는 안전장치이지, 작정한 우회 (eval, 설정 주입, 셸 트릭) 를 전부 막는 샌드박스가 아니다. 알려진 우회 꼴은 self-test 케이스로 하나씩 닫고 있고 (push 60, model 143), model guard 의 JS 읽기는 진짜 파서와 비교하는 차등 퍼징 (`tools/fuzz/`, 이 판에서 60,000 스크립트 중 우회 0) 으로 점검한다. AST 파서 전환은 다음 판 과제. 그래서 `Workflow` 스크립트에 쓰면 안 되는 것은 [Workflow 스크립트에 쓰면 안 되는 것](#workflow-스크립트에-쓰면-안-되는-것) 에 모아 두었다.
 
 ## 얼마나 아끼나
 
@@ -66,7 +66,7 @@ Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 
 
 | 종류 | 파일 | 하는 일 |
 |---|---|---|
-| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | model, effort 리터럴 강제, 상위, 하위 티어는 표지 필요 (역할 모드면 haiku 는 역할 표지). `--self-test` 142 케이스 |
+| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | model, effort 리터럴 강제, 상위, 하위 티어는 표지 필요 (역할 모드면 haiku 는 역할 표지). `--self-test` 143 케이스 |
 | hook | `hooks/git-push-guard.py` (PreToolUse: Bash) | develop / main / master push deny, fail-closed. `--self-test` 60 케이스 |
 | hook | `hooks/memory-lint-hook.py` (SessionStart) + `scripts/memory-lint.py` | 메모리 디렉토리 점검, 문제 있을 때만 알림 |
 | hook | `hooks/git-readonly-guard.py` (에이전트 전용 PreToolUse: Bash, `settings.json` 에는 안 들어감) | `scout-git` 에이전트 안에서 읽기 전용 git 만 통과시키는 allowlist: 파이프, 리다이렉트, 쓰기 서브커맨드, 모르는 옵션은 deny, `--no-ext-diff` 강제. `--self-test` 76 케이스 |
@@ -163,7 +163,7 @@ hook 은 `agent()` 호출을 찾으려고 작은 상태 기계로 문자열과 �
 
 ### 점검
 
-`python3 ~/.claude/hooks/subagent-model-guard.py --self-test` 가 회귀 케이스 142개를 돌리고 읽은 env 값을 찍는다. `lapbar doctor` 는 설치된 사본으로 그 self-test 와 프로브 3개 (model 없음, 정상 호출, 표지 없는 haiku) 를 돈다. 지금까지 찾아 닫은 숨기기 꼴은 `CHANGELOG.md` 에 있다.
+`python3 ~/.claude/hooks/subagent-model-guard.py --self-test` 가 회귀 케이스 143개를 돌리고 읽은 env 값을 찍는다. `lapbar doctor` 는 설치된 사본으로 그 self-test 와 프로브 3개 (model 없음, 정상 호출, 표지 없는 haiku) 를 돈다. 지금까지 찾아 닫은 숨기기 꼴은 `CHANGELOG.md` 에 있다.
 
 ## 공개본에서 뺀 것
 
