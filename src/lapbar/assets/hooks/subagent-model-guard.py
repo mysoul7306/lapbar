@@ -5,7 +5,8 @@ Background: a subagent that omits model inherits the parent (session) model as i
 recurring when they were only advice, so this blocks it at the harness level.
 
 What it blocks is **omitted or unclear values** and **upper/lower tiers without owner approval** - a literal opus / sonnet
-model passes, fable / haiku only together with an approval mark inside that call (`[owner-approved: fable]`, `[owner-approved: haiku]`).
+model passes, fable / haiku only together with an approval mark inside that call (`[<owner>-approved: fable]`,
+`[<owner>-approved: haiku]`, where `<owner>` is env SUBAGENT_GUARD_OWNER and defaults to `owner`), or haiku in role mode (rule 9).
 
 Check rules:
   1. model and effort count only as **string literals at the top level of opts** - variables, ternaries, parenthesized
@@ -16,18 +17,30 @@ Check rules:
      to their family and get the same rules.
   3. Up to FABLE_MAX fable agent() **call sites** per Workflow script. One site inside a loop that runs N times cannot be
      counted statically - the run-count limit is left to the rule (rules/subagent-review.md) and to announcing the scale.
-  4. fable and haiku only with a mark **inside that call** (prompt for Agent, inside the parentheses for agent()).
-     The model could write the mark itself; that limit is known, and writing a mark without owner approval is treated as a rule violation.
+  4. fable and haiku only with a mark **inside that call** (prompt for Agent, inside the parentheses for agent(); a comment
+     inside the parentheses counts too). The model could write the mark itself; that limit is known, and writing a mark
+     without owner approval is treated as a rule violation.
   5. effort is a lowercase literal from EFFORTS. Levels above the cap EFFORT_CAP (default xhigh, set with env
      SUBAGENT_EFFORT_CAP - put it in settings.json env to cover every session) need a `[owner-approved: <level>]` mark
      inside that call.
   6. opts must be **one flat object literal** - an object chosen by a ternary (`c ? {…} : {…}`), spread (`...`), computed
      keys (`['effort']`), get/set, and identifier escapes get a shape deny (bypasses where a later value overrides the
      earlier literal). Shorthand (`{effort}`) is reported as [a variable].
-  7. fail-closed: a script with an unclosed string or comment (regex literals like `/[/*]/`), an unreadable scriptPath,
-     and internal hook exceptions are all denied. A call by saved workflow name looks up `~/.claude/workflows/<name>.js`
+  7. fail-closed: a regex literal (a `/` after an operator, an opening bracket, a line start or a keyword such as return -
+     its quotes can pair up with a later regex and hide an agent() in between), a newline inside a quoted string (a JS
+     syntax error; the same hiding trick across lines), an unclosed string or comment, an unreadable scriptPath, and
+     internal hook exceptions are all denied. A call by saved workflow name looks up `~/.claude/workflows/<name>.js`
      and `<cwd>/.claude/workflows/<name>.js` and checks it; if neither exists (built in) it passes.
   8. deny text = reason + where to fix + one short GUIDE line. Detailed rules live in rules/subagent-review.md.
+  9. haiku role mode (env SUBAGENT_HAIKU_ROLE_MODE=role, default off = the mark rule only): haiku passes without an
+     approval mark when that call carries both a `[haiku role: <mechanical job>]` mark and a `[verify: <mechanical check
+     the parent will run>]` mark and its effort is medium or high (low, xhigh and max are denied - a job that needs that
+     much thinking is not a haiku job). The approval mark keeps working in either mode.
+ 10. The owner name inside the marks comes from env SUBAGENT_GUARD_OWNER (default `owner`, so the default mark is
+     `[owner-approved: fable]`); a value left as a `<placeholder>` counts as unset. Put it in settings.json env so it
+     reaches every session.
+ 11. The checks are linear in the script size (one prefix depth table per text); the self-test asserts that a 1500-key
+     schema passes in under 2 seconds, because a hook that outruns the harness timeout is skipped, not denied.
 
 `python3 subagent-model-guard.py --self-test` = regression cases (must_contain in the self-test is reason-only text that is not in GUIDE).
 """
@@ -39,19 +52,24 @@ import sys
 GUIDE = (
     "Rules: model is an opus / sonnet literal (no omission, inherit, or variables). "
     "Single Agent = opus, Workflow agent() = opus, mechanical collection/parsing = sonnet. "
-    "fable only when the owner approved it for that task - a '[owner-approved: fable]' mark inside that call (up to 2 sites per workflow), "
-    "haiku also only with a '[owner-approved: haiku]' mark. "
-    "effort is a literal too (low/medium/high/xhigh, max needs a '[owner-approved: max]' mark - work agents high, mechanical collection low, judge/critic xhigh. omitted = inherits the session effort). "
+    "fable only when the owner approved it for that task - a '[<owner>-approved: fable]' mark inside that call (up to 2 sites per workflow), "
+    "haiku also only with a '[<owner>-approved: haiku]' mark (role mode: a '[haiku role: …]' plus a '[verify: …]' mark, effort medium/high). "
+    "effort is a literal too (low/medium/high/xhigh, max needs a '[<owner>-approved: max]' mark - work agents high, mechanical collection low, judge/critic xhigh. omitted = inherits the session effort). "
+    "<owner> = env SUBAGENT_GUARD_OWNER, default 'owner'. "
     "Limits differ by plan, so check /usage first. Details = ~/.claude/rules/subagent-review.md"
 )
 
 TIERS = ("fable", "opus", "sonnet", "haiku")
 FABLE_MAX = 2                      # cap on fable agent() call sites in one Workflow script
-HAIKU_MARK = "[owner-approved: haiku]"   # haiku approval mark - must be inside that call (prompt for Agent)
-FABLE_MARK = "[owner-approved: fable]"   # fable approval mark - same rule as haiku
+OWNER_ENV = "SUBAGENT_GUARD_OWNER"   # name inside the approval marks ([<owner>-approved: …]). A team member puts their own name in settings.json env
+OWNER_DEFAULT = "owner"
 EFFORTS = ("low", "medium", "high", "xhigh", "max")   # lowest first. Agent/Task effort and workflow agent() effort: must be one of these as a literal
 EFFORT_CAP_DEFAULT = "xhigh"       # levels above this (max) need the mark ([owner-approved: max]) inside that call. Set with env SUBAGENT_EFFORT_CAP
-EFFORT_MARK = "[owner-approved: %s]"      # approval mark for levels above the effort cap (same form as the fable and haiku marks)
+HAIKU_ROLE_MODE_ENV = "SUBAGENT_HAIKU_ROLE_MODE"   # "role" turns on haiku role mode; anything else = the mark rule only
+HAIKU_ROLE_RE = re.compile(r"\[haiku role:\s*[^\]\s][^\]]*\]")   # [haiku role: lint queue cleanup] - which mechanical job
+HAIKU_VERIFY_RE = re.compile(r"\[verify:\s*[^\]\s][^\]]*\]")       # [verify: memory-lint rerun, 0 findings] - the mechanical check the parent will run
+HAIKU_EFFORT_MIN = "medium"        # lowest effort for a haiku role (low is denied)
+HAIKU_EFFORT_MAX = "high"          # highest effort for a haiku role (a job that needs more thinking is not a haiku job)
 
 AGENT_CALL = re.compile(r'(?<![\w$])agent\s*\(')  # x.agent( also counts as a call and gets the same checks
 # agent used outside a call (alias assignment, argument, property access) hides call sites, so deny (2026-10-22 security review).
@@ -59,7 +77,29 @@ AGENT_ALIAS = re.compile(r'(?<![\w$])agent\b(?!\s*\()')
 # Dynamic access (eval, Function, globalThis, computed property) hides call sites, so deny.
 DYNAMIC_ACCESS = re.compile(r'(?<![\w$.])(eval|Function|globalThis)\s*[(\[.]|\[\s*[\'"`]?agent[\'"`]?\s*\]')
 LITERAL = re.compile(r"""\s*(['"`])([A-Za-z0-9_.\-]+)\1""")         # string literal in a value position
+REGEX_PREV = set("(,=:[!&|?{};+-*%<>~^")                            # a `/` after one of these is a regex literal, not division
+REGEX_KEYWORDS = {"return", "typeof", "case", "in", "of", "void", "delete", "instanceof", "new", "throw", "yield", "await", "else", "do"}  # a `/` after one of these words is a regex too
 OPT_KEYS = ("model", "effort")                                       # keys that must be literals at the top level of agent() opts
+
+
+def owner():
+    """Name inside the approval marks - env SUBAGENT_GUARD_OWNER, or the default when it is empty or still a <placeholder>."""
+    v = os.environ.get(OWNER_ENV, "").strip()
+    if not v or (v.startswith("<") and v.endswith(">")):
+        return OWNER_DEFAULT
+    return v
+
+
+def haiku_mark():
+    return "[%s-approved: haiku]" % owner()   # haiku approval mark - must be inside that call (prompt for Agent)
+
+
+def fable_mark():
+    return "[%s-approved: fable]" % owner()   # fable approval mark - same rule as haiku
+
+
+def effort_mark(level):
+    return "[%s-approved: %s]" % (owner(), level)   # approval mark for levels above the effort cap (same form as the fable and haiku marks)
 
 
 def deny(reason):
@@ -106,14 +146,20 @@ def blank_strings_and_comments(src):
     """Return (text of the same length with string and comment contents replaced by spaces, end state).
 
     Newlines are kept so line numbers and offsets match the original 1:1. Inside a template literal, ${ … } is code
-    and stays as is (nested braces are tracked). Regex literals are not handled - a form like `/[/*]/` that opens a
-    comment or string leaves the end state other than "code", so the caller denies (fail-closed).
+    and stays as is (nested braces are tracked). Regex literals are not parsed: a `/` after an operator, an opening
+    bracket, a line start or a keyword is treated as the start of one and raises ValueError (fail-closed). A `/` after an
+    identifier that is not a keyword counts as division; if such a regex still breaks the state, the caller denies on
+    the end state. A newline inside a ' or " string is a JS syntax error and raises ValueError too.
     """
     out = []
     n = len(src)
     i = 0
     state = "code"
     stack = []            # brace depth of each code level entered through ${ inside a template
+    last = None           # last non-blank character seen in code state - decides whether a `/` is division or a regex
+    prev = None           # the character before that (`++ /` and `-- /` are division)
+    word = ""             # the identifier word just before (a `/` after return, typeof, … is a regex)
+    word_open = False     # still appending to that word (a blank closes it)
     while i < n:
         c = src[i]
         nxt = src[i + 1] if i + 1 < n else ""
@@ -122,15 +168,29 @@ def blank_strings_and_comments(src):
                 state = "line"; out.append("  "); i += 2; continue
             if c == "/" and nxt == "*":
                 state = "block"; out.append("  "); i += 2; continue
+            is_regex = (last is None or (last in REGEX_PREV and not (last in "+-" and prev == last)) or word in REGEX_KEYWORDS)
+            if c == "/" and is_regex:
+                # start of a regex literal - a quote inside it opens string state, and when the next regex closes that
+                # state again, every agent() in between is blanked and escapes the check. Fail closed instead.
+                raise ValueError("a regex literal (/…/) cannot be read by the hook - switch to new RegExp('…')")
             if c in ("'", '"', "`"):
-                state = c; out.append(c); i += 1; continue        # keep the quote itself (to track literal positions)
+                state = c; out.append(c); prev, last, word = last, c, ""; i += 1; continue        # keep the quote itself (to track literal positions)
             if stack:
                 if c == "{":
                     stack[-1] += 1
                 elif c == "}":
                     if stack[-1] == 0:
-                        stack.pop(); state = "`"; out.append("}"); i += 1; continue
+                        stack.pop(); state = "`"; out.append("}"); prev, last, word = last, "}", ""; i += 1; continue
                     stack[-1] -= 1
+            if c not in " \t\r\n":
+                prev, last = last, c
+                if c.isalnum() or c in "_$":
+                    word = (word + c) if word_open else c
+                    word_open = True
+                else:
+                    word, word_open = "", False
+            else:
+                word_open = False                # an identifier after a blank is a new word; the previous word stays until the `/` decision
             out.append(c); i += 1; continue
         if state == "line":
             if c == "\n":
@@ -146,24 +206,39 @@ def blank_strings_and_comments(src):
         if c == "\\":
             out.append(" "); out.append("\n" if nxt == "\n" else " "); i += 2; continue
         if state == "`" and c == "$" and nxt == "{":
-            stack.append(0); state = "code"; out.append("${"); i += 2; continue
+            stack.append(0); state = "code"; out.append("${"); prev, last, word = last, "{", ""; i += 2; continue
+        if state in ("'", '"') and c == "\n":
+            # a JS syntax error - a quote inside a regex literal that opened string state would carry it across lines and hide an agent()
+            raise ValueError("newline inside a quoted string - an unclosed string, or a quote inside a regex literal (/…/); switch to new RegExp('…')")
         if c == state:
-            state = "code"; out.append(c); i += 1; continue
+            state = "code"; out.append(c); last = c; i += 1; continue
         out.append(c if c == "\n" else " "); i += 1; continue
     return "".join(out), state
 
 
+_DEPTH_CACHE = {}   # text -> (brace, paren, bracket) depth per prefix length. Recounting per character is quadratic: a 10 KB schema took 17 seconds
+
+
+def _depth_table(text):
+    t = _DEPTH_CACHE.get(text)
+    if t is None:
+        t = [(0, 0, 0)]
+        b = p = k = 0
+        for ch in text:
+            if ch == "{": b += 1
+            elif ch == "}": b -= 1
+            elif ch == "(": p += 1
+            elif ch == ")": p -= 1
+            elif ch == "[": k += 1
+            elif ch == "]": k -= 1
+            t.append((b, p, k))
+        _DEPTH_CACHE[text] = t
+    return t
+
+
 def _depths_at(text, idx):
-    """(brace, paren, bracket) depth of text[:idx]."""
-    b = p = k = 0
-    for ch in text[:idx]:
-        if ch == "{": b += 1
-        elif ch == "}": b -= 1
-        elif ch == "(": p += 1
-        elif ch == ")": p -= 1
-        elif ch == "[": k += 1
-        elif ch == "]": k -= 1
-    return b, p, k
+    """(brace, paren, bracket) depth of text[:idx] - one table per text, then a lookup."""
+    return _depth_table(text)[idx]
 
 
 def _literal_value(code, raw, pos):
@@ -312,9 +387,11 @@ def classify(model):
     v = str(model).strip().lower()
     if not v or v == "inherit":
         return None, "model '%s' is not allowed - to inherit, write the current model name as is" % v
-    for t in TIERS:
-        if t in v:
-            return t, None
+    hits = [t for t in TIERS if t in v]
+    if len(hits) > 1:
+        return None, "model '%s' names more than one tier (%s) - use one" % (v, "/".join(hits))
+    if hits:
+        return hits[0], None
     return None, "model '%s' is not in the allow list (fable / opus / sonnet / haiku)" % v
 
 
@@ -328,6 +405,38 @@ def effort_cap():
     return v if v in EFFORTS else EFFORT_CAP_DEFAULT
 
 
+def haiku_role_mode():
+    """True when env SUBAGENT_HAIKU_ROLE_MODE is "role" (default off = the mark rule only)."""
+    return os.environ.get(HAIKU_ROLE_MODE_ENV, "").strip().lower() == "role"
+
+
+def haiku_error(text, effort, where, fallback):
+    """Rejection reason for a haiku call or None. text = where to look for marks (prompt, inside the parentheses), fallback = the mark-rule reason.
+
+    Role mode = both a `[haiku role: …]` and a `[verify: …]` mark, and effort within HAIKU_EFFORT_MIN..HAIKU_EFFORT_MAX. The approval mark passes in either mode.
+    """
+    text = text or ""
+    if haiku_mark() in text:
+        return None
+    if not haiku_role_mode():
+        return fallback
+    missing = []
+    if not HAIKU_ROLE_RE.search(text):
+        missing.append("a '[haiku role: <mechanical job - lint cleanup, result aggregation, grep summary, md5 comparison>]' mark")
+    if not HAIKU_VERIFY_RE.search(text):
+        missing.append("a '[verify: <mechanical check the parent will run - lint rerun, grep 0 hits, diff>]' mark")
+    if missing:
+        return (where + ": haiku is only for roles with a mechanical check. Put " + " and ".join(missing)
+                + " inside that call; otherwise use sonnet")
+    v = str(effort or "").strip()
+    if v in EFFORTS and EFFORTS.index(v) < EFFORTS.index(HAIKU_EFFORT_MIN):
+        return where + ": a haiku role needs effort medium or higher - use 'medium' instead of '%s'" % v
+    if v in EFFORTS and EFFORTS.index(v) > EFFORTS.index(HAIKU_EFFORT_MAX):
+        return (where + ": effort '%s' does not fit a haiku role - haiku goes up to medium/high; a job that needs more thinking belongs to sonnet/opus"
+                % v)
+    return None
+
+
 def effort_error(effort, text, where):
     """Rejection reason for an effort value (Agent tool_input.effort, agent() effort: literal) or None. text = where to look for the mark (prompt, inside the parentheses)."""
     if effort is None or str(effort).strip() == "":
@@ -339,9 +448,9 @@ def effort_error(effort, text, where):
             return where + ": write effort '%s' in lowercase ('%s') - the runtime may not accept uppercase, so it is not sent as is" % (v, v.lower())
         return where + ": effort '%s' is not in the allow list (%s)" % (v, "/".join(EFFORTS))
     cap = effort_cap()
-    if EFFORTS.index(v) > EFFORTS.index(cap) and (EFFORT_MARK % v) not in (text or ""):
-        return (where + ": effort '%s' is above the cap '%s'. If the owner approved it for that task, put a '%s' mark inside that call; otherwise use '%s' or lower. "
-                "(set the cap with env SUBAGENT_EFFORT_CAP)" % (v, cap, EFFORT_MARK % v, cap))
+    if EFFORTS.index(v) > EFFORTS.index(cap) and effort_mark(v) not in (text or ""):
+        return (where + ": effort '%s' is above the cap '%s'. If %s approved it for that task, put a '%s' mark inside that call; otherwise use '%s' or lower. "
+                "(set the cap with env SUBAGENT_EFFORT_CAP)" % (v, cap, owner(), effort_mark(v), cap))
     return None
 
 
@@ -357,12 +466,15 @@ def decide(payload):
         tier, err = classify(model)
         if err:
             return tool + ": " + err + ". " + GUIDE
-        if tier == "haiku" and HAIKU_MARK not in (tool_input.get("prompt") or ""):
-            return (tool + " needs owner approval for that task to use haiku. If approved, put a "
-                    + HAIKU_MARK + " mark in prompt; otherwise use sonnet. " + GUIDE)
-        if tier == "fable" and FABLE_MARK not in (tool_input.get("prompt") or ""):
-            return (tool + " needs owner approval for that task to use fable. If approved, put a "
-                    + FABLE_MARK + " mark in prompt; otherwise use opus. " + GUIDE)
+        if tier == "haiku":
+            err = haiku_error(tool_input.get("prompt"), tool_input.get("effort"), tool + " call",
+                              tool + " needs %s approval for that task to use haiku. If approved, put a %s mark in prompt; otherwise use sonnet."
+                              % (owner(), haiku_mark()))
+            if err:
+                return err + " " + GUIDE
+        if tier == "fable" and fable_mark() not in (tool_input.get("prompt") or ""):
+            return (tool + " needs %s approval for that task to use fable. If approved, put a %s mark in prompt; otherwise use opus. "
+                    % (owner(), fable_mark()) + GUIDE)
         err = effort_error(tool_input.get("effort"), tool_input.get("prompt") or "", tool + " call")
         if err:
             return err + " " + GUIDE
@@ -400,18 +512,21 @@ def decide(payload):
             if err:
                 return "Workflow agent() line %d: %s. " % (c["line"], err) + GUIDE
             tiers.setdefault(tier, []).append(c)
-        fable_unmarked = [c["line"] for c in tiers.get("fable", []) if FABLE_MARK not in c["args"]]
+        fable_unmarked = [c["line"] for c in tiers.get("fable", []) if fable_mark() not in c["args"]]
         if fable_unmarked:
-            return ("Workflow fable agent() (line %s) is allowed only when the owner approved it for that task. If approved, put a %s mark "
-                    "inside that agent() call's parentheses (label or prompt); otherwise use opus. " % (_lines(fable_unmarked), FABLE_MARK) + GUIDE)
+            return ("Workflow fable agent() (line %s) is allowed only with %s approval for that task. If approved, put a %s mark "
+                    "inside that agent() call's parentheses (label or prompt); otherwise use opus. " % (_lines(fable_unmarked), owner(), fable_mark()) + GUIDE)
         fable = [c["line"] for c in tiers.get("fable", [])]
         if len(fable) > FABLE_MAX:
             return ("Workflow has fable agent() at %d sites (line %s) - fable is for judge/critic seats, up to %d sites; use opus for the rest. "
                     % (len(fable), _lines(fable), FABLE_MAX) + GUIDE)
-        haiku = [c["line"] for c in tiers.get("haiku", []) if HAIKU_MARK not in c["args"]]
-        if haiku:
-            return ("Workflow haiku agent() (line %s) is allowed only when the owner approved it for that task. If approved, put a %s mark "
-                    "inside that agent() call's parentheses (label or prompt); otherwise use sonnet. " % (_lines(haiku), HAIKU_MARK) + GUIDE)
+        for c in tiers.get("haiku", []):
+            where = "Workflow haiku agent() (line %d)" % c["line"]
+            err = haiku_error(c["args"], c["effort"], where,
+                              where + " is allowed only with %s approval for that task. If approved, put a %s mark "
+                              "inside that agent() call's parentheses (label or prompt); otherwise use sonnet." % (owner(), haiku_mark()))
+            if err:
+                return err + " " + GUIDE
         emissing = [c["line"] for c in calls if c["effort_status"] == "missing"]
         if emissing:
             return ("Workflow agent(): of %d calls, %d have no effort (%s, line %s). The session effort is inherited; put effort at the top level of opts "
@@ -545,8 +660,8 @@ def _self_test():
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "haiku", "effort": "low"}}, True, "to use haiku"),
         ("Agent haiku with mark → pass",
          {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: haiku] log parsing", "model": "haiku", "effort": "low"}}, False, None),
-        ("regex literal /[/*]/ opens a comment and breaks parsing → deny (fail-closed)",
-         wf("const r = /[/*]/\nconst a = await agent('p', {model: 'haiku', effort: 'low'})"), True, "unclosed string or comment"),
+        ("regex literal /[/*]/ → deny (fail-closed, reported as a regex literal)",
+         wf("const r = /[/*]/\nconst a = await agent('p', {model: 'haiku', effort: 'low'})"), True, "regex literal"),
         # --- 2026-10-13 evening effort
         ("Agent without effort → deny (inherits the session effort)",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus"}}, True, "no effort"),
@@ -624,11 +739,11 @@ def _self_test():
                   {"tool_name": "Workflow", "tool_input": {"scriptPath": tmp}}, True, "scriptPath"))
     cases.append(("scriptPath unreadable → deny (fail-closed)",
                   {"tool_name": "Workflow", "tool_input": {"scriptPath": tmp + ".nope"}}, True, "cannot read"))
-    for token in ("fable", "opus", "sonnet", "haiku", "effort", "omit", "/usage"):
+    for token in ("fable", "opus", "sonnet", "haiku", "effort", "omit", "/usage", "role", OWNER_ENV):
         if token not in GUIDE:
             print("FAIL - GUIDE text is missing %r" % token)
             sys.exit(1)
-    print("PASS - GUIDE text has all 7 tokens (fable/opus/sonnet/haiku/effort/omit//usage), length %d chars" % len(GUIDE))
+    print("PASS - GUIDE text has all 9 tokens (fable/opus/sonnet/haiku/effort/omit//usage/role/owner env), length %d chars" % len(GUIDE))
     failed = 0
 
     def run(name, payload, expect_deny, must_contain):
@@ -642,16 +757,116 @@ def _self_test():
         print(("PASS" if ok else "FAIL"), "-", name, ("" if ok else " | reason=%r" % reason))
         return 0 if ok else 1
 
-    saved_cap = os.environ.pop("SUBAGENT_EFFORT_CAP", None)   # run with the default cap (the caller's value is restored at the end)
+    # haiku role mode (env SUBAGENT_HAIKU_ROLE_MODE=role) - the case name head is the env value
+    R = "[haiku role: lint queue cleanup] [verify: memory-lint rerun, 0 findings] "
+    role_cases = [
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Agent haiku role+verify, effort low → deny (medium or higher)",
+         {"tool_name": "Agent", "tool_input": {"prompt": R + "fix the descriptions", "model": "haiku", "effort": "low"}}, True, "medium or higher"),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Agent haiku role+verify, effort medium → pass",
+         {"tool_name": "Agent", "tool_input": {"prompt": R + "fix the descriptions", "model": "haiku", "effort": "medium"}}, False, None),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Agent haiku role+verify, effort high → pass",
+         {"tool_name": "Agent", "tool_input": {"prompt": R + "fix the descriptions", "model": "haiku", "effort": "high"}}, False, None),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Agent haiku role mark only → deny",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[haiku role: lint] x", "model": "haiku", "effort": "medium"}}, True, "roles with a mechanical check"),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Agent haiku verify mark only → deny",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[verify: lint 0 hits] x", "model": "haiku", "effort": "medium"}}, True, "roles with a mechanical check"),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Agent haiku empty role mark → deny",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[haiku role: ] [verify: lint 0 hits] x", "model": "haiku", "effort": "medium"}}, True, "roles with a mechanical check"),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Agent haiku role+verify, effort xhigh → deny",
+         {"tool_name": "Agent", "tool_input": {"prompt": R + "x", "model": "haiku", "effort": "xhigh"}}, True, "up to medium/high"),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Agent haiku approval mark only → pass (the mark rule still holds)",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: haiku] x", "model": "haiku", "effort": "high"}}, False, None),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Workflow haiku role+verify in label, effort medium → pass",
+         wf("const a = await agent('p', {label: '" + R + "aggregate', model: 'haiku', effort: 'medium'})"), False, None),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Workflow haiku role+verify, effort low → deny (medium or higher)",
+         wf("const a = await agent('p', {label: '" + R + "aggregate', model: 'haiku', effort: 'low'})"), True, "medium or higher"),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Workflow haiku marks only in a comment outside the call → deny",
+         wf("// " + R + "\nconst a = await agent('p', {model: 'haiku', effort: 'medium'})"), True, "roles with a mechanical check"),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: Workflow haiku role+verify, effort xhigh → deny",
+         wf("const a = await agent('p', {label: '" + R + "aggregate', model: 'haiku', effort: 'xhigh'})"), True, "up to medium/high"),
+        ("SUBAGENT_HAIKU_ROLE_MODE=role: fable without mark is still denied",
+         {"tool_name": "Agent", "tool_input": {"prompt": R + "x", "model": "fable", "effort": "high"}}, True, "to use fable"),
+        ("SUBAGENT_HAIKU_ROLE_MODE=off: Agent haiku role+verify marks only → deny (the mark rule)",
+         {"tool_name": "Agent", "tool_input": {"prompt": R + "x", "model": "haiku", "effort": "medium"}}, True, "to use haiku"),
+        ("SUBAGENT_HAIKU_ROLE_MODE=bogus: role marks only → deny (treated as off)",
+         wf("const a = await agent('p', {label: '" + R + "aggregate', model: 'haiku', effort: 'medium'})"), True, "haiku agent() (line 1) is allowed only"),
+    ]
+    # owner name env SUBAGENT_GUARD_OWNER - the marks change with it
+    owner_cases = [
+        ("SUBAGENT_GUARD_OWNER=alice: Agent haiku '[alice-approved: haiku]' → pass",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[alice-approved: haiku] log parsing", "model": "haiku", "effort": "low"}}, False, None),
+        ("SUBAGENT_GUARD_OWNER=alice: Agent haiku '[owner-approved: haiku]' → deny (name mismatch)",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: haiku] log parsing", "model": "haiku", "effort": "low"}}, True, "needs alice approval"),
+        ("SUBAGENT_GUARD_OWNER=alice: Workflow fable '[alice-approved: fable]' → pass",
+         wf("const a = await agent('p', {label: '[alice-approved: fable] judge', model: 'fable', effort: 'high'})"), False, None),
+        ("SUBAGENT_GUARD_OWNER=alice: Agent effort max '[alice-approved: max]' → pass",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[alice-approved: max] final", "model": "opus", "effort": "max"}}, False, None),
+        ("SUBAGENT_GUARD_OWNER=: empty means the default → '[owner-approved: haiku]' passes",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: haiku] log parsing", "model": "haiku", "effort": "low"}}, False, None),
+        ("SUBAGENT_GUARD_OWNER=<your name>: a placeholder means unset → '[owner-approved: haiku]' passes",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: haiku] log parsing", "model": "haiku", "effort": "low"}}, False, None),
+    ]
+    # review findings: regex literals that pair their quotes, division, more than one tier name, marks inside comments
+    review_cases = [
+        ("agent() between two regex literals with quotes is blanked → deny",
+         wf("const a = s.replace(/\"/g, '')\nconst r = await agent('p', {model: 'haiku', effort: 'max'})\nconst b = t.replace(/\"/g, '')"), True, "cannot be parsed"),
+        ("division a / b is not a regex → pass",
+         wf("const x = (a + 1) / 2\nconst y = n / m\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
+        ("model with two tier names (opus-haiku) → deny",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus-haiku", "effort": "high"}}, True, "more than one tier"),
+        ("agent() between two return /'/ regexes → deny",
+         wf("const f = s => { return /'/.test(s) }\nconst r = await agent('p', {model: 'haiku', effort: 'max'})\nconst g = s => { return /'/.test(s) }"), True, "cannot be parsed"),
+        ("regex at the head of a template expression ${/'/…} → deny",
+         wf("const t = `${/'/.source}`\nconst r = await agent('p', {model: 'haiku', effort: 'max'})\nconst u = `${/'/.source}`"), True, "cannot be parsed"),
+        ("i++ / 2 and n-- / k are division → pass",
+         wf("let i = 1, n = 4\nconst y = i++ / 2\nconst z = n-- / k\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
+        ("a mark inside a comment within the parentheses counts → pass",
+         wf("const r = await agent('p', { /* [owner-approved: fable] judge */ model: 'fable', effort: 'high' })"), False, None),
+        ("a / after an identifier is division (not a keyword) → pass",
+         wf("const avg = total / count\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), False, None),
+        ("a quoted string broken across lines → deny (syntax error, fail-closed)",
+         wf("const s = 'abc\ndef'\nconst r = await agent('p', {model: 'opus', effort: 'high'})"), True, "cannot be parsed"),
+    ]
+    saved_cap = os.environ.pop("SUBAGENT_EFFORT_CAP", None)   # run with the default cap (the caller's values are restored at the very end)
+    saved_role = os.environ.pop(HAIKU_ROLE_MODE_ENV, None)    # settings.json env may reach the shell too - run with role mode off
+    saved_owner = os.environ.pop(OWNER_ENV, None)
     for name, payload, expect_deny, must_contain in cases:
         failed += run(name, payload, expect_deny, must_contain)
     for name, payload, expect_deny, must_contain in cap_cases:
         os.environ["SUBAGENT_EFFORT_CAP"] = name.split(":")[0].split("=")[1]   # the case name head (SUBAGENT_EFFORT_CAP=<value>) is the env value
         failed += run(name, payload, expect_deny, must_contain)
-    os.environ.pop("SUBAGENT_EFFORT_CAP", None)
-    if saved_cap is not None:
+    os.environ.pop("SUBAGENT_EFFORT_CAP", None)                 # the role and owner cases run with the default cap too
+    for name, payload, expect_deny, must_contain in role_cases:
+        os.environ[HAIKU_ROLE_MODE_ENV] = name.split(":")[0].split("=")[1]
+        failed += run(name, payload, expect_deny, must_contain)
+    os.environ.pop(HAIKU_ROLE_MODE_ENV, None)
+    for name, payload, expect_deny, must_contain in owner_cases:   # role mode off: the mark rule only
+        os.environ[OWNER_ENV] = name.split(":")[0].split("=", 1)[1]
+        failed += run(name, payload, expect_deny, must_contain)
+    os.environ.pop(OWNER_ENV, None)
+    for name, payload, expect_deny, must_contain in review_cases:
+        failed += run(name, payload, expect_deny, must_contain)
+    import time
+    big = "const r = await agent('p', {model: 'opus', effort: 'high', schema: {type: 'object', properties: {" + ",".join("k%d: {type: 'string'}" % i for i in range(1500)) + "}}})"
+    t0 = time.time(); big_reason = decide(wf(big)); dt = time.time() - t0
+    ok = big_reason is None and dt < 2.0
+    print(("PASS" if ok else "FAIL"), "- a 1500-key schema passes in under 2 seconds (linear depth table) | %.2fs reason=%r" % (dt, big_reason))
+    failed += 0 if ok else 1
+    if saved_cap is not None:                                   # the caller's env comes back only after every case ran
         os.environ["SUBAGENT_EFFORT_CAP"] = saved_cap
-    cases = cases + cap_cases
+    if saved_owner is not None:
+        os.environ[OWNER_ENV] = saved_owner
+    if saved_role is not None:
+        os.environ[HAIKU_ROLE_MODE_ENV] = saved_role
+    try:
+        _st = json.load(open(os.path.expanduser("~/.claude/settings.json"), encoding="utf-8"))
+        _env = _st.get("env") or {}
+        print("settings.json env: owner=%s role_mode=%s cap=%s (what Claude Code passes to hooks - a terminal shell does not carry it)"
+              % (_env.get(OWNER_ENV) or "(unset -> default %s)" % OWNER_DEFAULT, _env.get(HAIKU_ROLE_MODE_ENV) or "(unset -> off)",
+                 _env.get("SUBAGENT_EFFORT_CAP") or "(unset -> %s)" % EFFORT_CAP_DEFAULT))
+    except Exception as e:
+        print("settings.json not readable (%s) - skipped the env summary" % e.__class__.__name__)
+    cases = cases + cap_cases + role_cases + owner_cases + review_cases + ["big-schema"]
     try:
         os.unlink(tmp)
     except OSError:
