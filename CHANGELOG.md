@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 - 2026-11-02
+
+- `subagent-model-guard`: **haiku is a free tier.** `opus`, `sonnet` and `haiku` pass as literals with no tag - which of the three to use is the model's own call. The `[owner-approved: haiku]` tag, the haiku role mode (`SUBAGENT_HAIKU_ROLE_MODE`, the `[haiku role: …]` and `[verify: …]` tags) and the haiku-only effort window are removed; old tags left in a call are harmless text. The role mode was an approval gate dressed as a quality gate, and in practice it pushed mechanical work back to sonnet. Only `fable` still needs an approval tag.
+- `subagent-model-guard`: **effort `low` is denied for every model** (`EFFORT_MIN = medium`). A haiku run at low effort produced bad output in the 0.2.0 trial; the owner chose one rule for all tiers over a per-tier window. A `SUBAGENT_EFFORT_CAP` below the floor is ignored. The `--self-test` prints a warning when the old `SUBAGENT_HAIKU_ROLE_MODE` key is still in `settings.json`. `--self-test` 153 → 145 cases (the 17 role-mode and haiku-tag cases became free-tier and low-deny cases).
+- `lane-workflow.js`: the collect lane runs `sonnet medium` (was `sonnet low`, which the guard now denies). `lane.md` and `subagent-review.md` follow.
+- `lapbar doctor`: the third model-guard probe is now "effort low is denied" (was "haiku without a tag").
+- `tools/fuzz/compare.py`: haiku counts as safe, `low` as must-deny. 20,000 generated scripts (seed 1): 0 bypasses on 0.3.0; the 0.2.0 hook shows 246, all `effort: 'low'` calls it let through.
+
 ## 0.2.0 - 2026-10-28
 
 - `subagent-model-guard`: **haiku role mode** (`SUBAGENT_HAIKU_ROLE_MODE=role` in the `env` block of `settings.json`, default off) - haiku passes without an approval tag when the call carries a `[haiku role: …]` tag and a `[verify: …]` tag and its effort is medium or high. The approval tag keeps working in either mode.
