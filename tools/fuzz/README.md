@@ -16,3 +16,4 @@ and writes the examples to `run-bypass.json`, `run-fp.json`, `run-syntaxpass.jso
 harness is only trusted when it finds the shapes that older version was known to miss.
 
 2026-10-28, 60,000 scripts (seeds 1 and 2): 0 bypasses on 0.2.0, 1,364 on 0.1.1.
+2026-11-02, 20,000 scripts (seed 1): 0 bypasses on 0.3.0, 246 on 0.2.0 (all `effort: 'low'`, the rule 0.3.0 added).

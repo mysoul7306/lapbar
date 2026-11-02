@@ -1,6 +1,6 @@
 """Join hook decisions with the acorn oracle. Usage: python3 -I compare.py <hook.py> corpus.jsonl oracle.jsonl <out-prefix>
 
-bypass  = acorn parses, sees a call that must be denied (haiku / fable / missing or non-literal model or effort / effort max /
+bypass  = acorn parses, sees a call that must be denied (fable / missing or non-literal model or effort / effort low or max /
           spread or computed opts) or an agent alias, and the hook passes.
 fp      = acorn parses, sees nothing to deny, and the hook denies (bucketed by reason head).
 syntax  = acorn cannot parse (JS would not run it either) - counted, not judged.
@@ -19,8 +19,8 @@ oracle = {}
 for line in open(oracle_path, encoding="utf-8"):
     o = json.loads(line); oracle[o["id"]] = o
 
-SAFE_MODELS = {"opus", "sonnet"}
-SAFE_EFFORTS = {"low", "medium", "high", "xhigh"}
+SAFE_MODELS = {"opus", "sonnet", "haiku"}      # 0.3.0: haiku is a free tier
+SAFE_EFFORTS = {"medium", "high", "xhigh"}       # 0.3.0: low is denied for every model
 
 
 def must_deny(o):
