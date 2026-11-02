@@ -5,7 +5,7 @@ Background: a subagent that omits model inherits the parent (session) model as i
 recurring when they were only advice, so this blocks it at the harness level.
 
 What it blocks is **omitted or unclear values**, **the top tier without owner approval** and **effort low** - a literal
-opus / sonnet / haiku model passes (which of the three to use is the model's own call), fable only together with an approval
+opus / sonnet / haiku model passes (which of the three to use is left to the calling session), fable only together with an approval
 mark inside that call (`[<owner>-approved: fable]`, where `<owner>` is env SUBAGENT_GUARD_OWNER and defaults to `owner`),
 and effort must be medium or higher (rule 9).
 
@@ -40,10 +40,10 @@ Check rules:
      an unclosed string or comment, an unreadable scriptPath, and internal hook exceptions are all denied. A call by saved workflow name looks up `~/.claude/workflows/<name>.js`
      and `<cwd>/.claude/workflows/<name>.js` and checks it; if neither exists (built in) it passes.
   8. deny text = reason + where to fix + one short GUIDE line. Detailed rules live in rules/subagent-review.md.
-  9. effort has a floor: `low` is denied for every model (EFFORT_MIN = medium). A haiku run at low effort produced bad
-     output, and one rule for all tiers is simpler than a per-tier window, so the floor applies to opus and sonnet too.
-     haiku itself needs no mark (the 0.2.0 approval mark and role mode are gone); a SUBAGENT_EFFORT_CAP below the floor
-     is ignored. Old marks left in a call are harmless text.
+  9. effort has a floor: `low` is denied for every model (EFFORT_MIN = medium). In a trial a haiku run at low effort ignored
+     its output instructions (the numbers were right), and one rule for all tiers is simpler than a per-tier window, so the
+     floor applies to opus and sonnet too. haiku itself needs no mark (the 0.2.0 approval mark and role mode are gone). A
+     SUBAGENT_EFFORT_CAP below the floor is raised to the floor. Old marks left in a call are harmless text.
  10. The owner name inside the marks comes from env SUBAGENT_GUARD_OWNER (default `owner`, so the default mark is
      `[owner-approved: fable]`); a value left as a `<placeholder>` counts as unset. Put it in settings.json env so it
      reaches every session.
@@ -61,7 +61,7 @@ import re
 import sys
 
 GUIDE = (
-    "Rules: model is an opus / sonnet / haiku literal (no omission, inherit, or variables) - which of the three is the model's own call "
+    "Rules: model is an opus / sonnet / haiku literal (no omission, inherit, or variables) - which of the three is left to the calling session "
     "(read and judge = opus, collection, parsing and allowed-command procedures = sonnet, aggregation the parent verifies mechanically = haiku). "
     "fable only when the owner approved it for that task - a '[<owner>-approved: fable]' mark inside that call (up to 2 sites per workflow). "
     "effort is a literal too (medium/high/xhigh - low is denied, max needs a '[<owner>-approved: max]' mark - work agents high, mechanical collection medium, judge/critic xhigh. omitted = inherits the session effort). "
@@ -74,8 +74,8 @@ FABLE_MAX = 2                      # cap on fable agent() call sites in one Work
 OWNER_ENV = "SUBAGENT_GUARD_OWNER"   # name inside the approval marks ([<owner>-approved: …]). A team member puts their own name in settings.json env
 OWNER_DEFAULT = "owner"
 EFFORTS = ("low", "medium", "high", "xhigh", "max")   # lowest first. Agent/Task effort and workflow agent() effort: must be one of these as a literal
-EFFORT_MIN = "medium"              # levels below this (low) are denied for every model (a low-effort run produced bad output; one rule for all tiers)
-EFFORT_CAP_DEFAULT = "xhigh"       # levels above this (max) need the mark ([owner-approved: max]) inside that call. Set with env SUBAGENT_EFFORT_CAP (a value below the floor is ignored)
+EFFORT_MIN = "medium"              # levels below this (low) are denied for every model (in a trial a low-effort run ignored its output instructions; one rule for all tiers)
+EFFORT_CAP_DEFAULT = "xhigh"       # levels above this (max) need the mark ([owner-approved: max]) inside that call. Set with env SUBAGENT_EFFORT_CAP (a value below the floor is raised to the floor)
 
 AGENT_CALL = re.compile(r'(?<![\w$])agent\s*\(')  # x.agent( also counts as a call and gets the same checks
 # agent used outside a call (alias assignment, argument, property access) hides call sites, so deny (2026-10-22 security review).
@@ -554,10 +554,11 @@ def _lines(nums):
 
 
 def effort_cap():
-    """effort cap. env SUBAGENT_EFFORT_CAP (a value in EFFORTS at or above the floor EFFORT_MIN) if set, otherwise the default (xhigh)."""
+    """effort cap. env SUBAGENT_EFFORT_CAP if it is a value in EFFORTS (a value below the floor EFFORT_MIN is raised to the floor, so a
+    0.2.0 setting of cap=low - "medium and above need a mark" - does not silently loosen), otherwise the default (xhigh)."""
     v = os.environ.get("SUBAGENT_EFFORT_CAP", "").strip().lower()
-    if v in EFFORTS and EFFORTS.index(v) >= EFFORTS.index(EFFORT_MIN):
-        return v
+    if v in EFFORTS:
+        return v if EFFORTS.index(v) >= EFFORTS.index(EFFORT_MIN) else EFFORT_MIN
     return EFFORT_CAP_DEFAULT
 
 
@@ -567,13 +568,13 @@ def effort_error(effort, text, where):
         return (where + " has no effort. The session effort would be inherited as is; call again with effort set "
                 "(work agent high, mechanical collection medium, judge/critic xhigh)")
     v = str(effort).strip()
+    if v.lower() in EFFORTS and EFFORTS.index(v.lower()) < EFFORTS.index(EFFORT_MIN):   # 'Low' lands here too: a lowercase hint would only earn a second deny
+        return (where + ": effort '%s' is denied for every model (in a trial a low-effort run ignored its output instructions) - use '%s' or higher"
+                % (v, EFFORT_MIN))
     if v not in EFFORTS:
         if v.lower() in EFFORTS:
             return where + ": write effort '%s' in lowercase ('%s') - the runtime may not accept uppercase, so it is not sent as is" % (v, v.lower())
-        return where + ": effort '%s' is not in the allow list (%s)" % (v, "/".join(EFFORTS))
-    if EFFORTS.index(v) < EFFORTS.index(EFFORT_MIN):
-        return (where + ": effort '%s' is denied for every model (low-effort runs produced bad output) - use '%s' or higher"
-                % (v, EFFORT_MIN))
+        return where + ": effort '%s' is not in the allow list (%s)" % (v, "/".join(EFFORTS[EFFORTS.index(EFFORT_MIN):]))
     cap = effort_cap()
     if EFFORTS.index(v) > EFFORTS.index(cap) and effort_mark(v) not in (text or ""):
         return (where + ": effort '%s' is above the cap '%s'. If it carries %s approval for that task, put a '%s' mark inside that call; otherwise use '%s' or lower. "
@@ -765,7 +766,7 @@ def _self_test():
          wf("// [owner-approved: fable]\nconst a = await agent('p', {model: 'fable', effort: 'high'})"), True, "fable agent() (line 2) is allowed only"),
         ("Workflow fable mark at 1 site + opus → pass",
          wf("const a = await agent('p', {label: '[owner-approved: fable] judge', model: 'fable', effort: 'xhigh'})\nconst b = await agent('q', {model: 'opus', effort: 'high'})"), False, None),
-        ("Workflow haiku without mark, effort medium → pass (haiku is a free tier)",
+        ("Workflow haiku without mark, effort medium → pass (haiku needs no tag)",
          wf("const a = await agent('p', {model: 'haiku', effort: 'medium'})"), False, None),
         ("Workflow haiku effort low → deny (low is denied for every model)",
          wf("const a = await agent('p', {model: 'haiku', effort: 'low'})"), True, "denied for every model"),
@@ -794,7 +795,7 @@ def _self_test():
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "inherit", "effort": "high"}}, True, "is not allowed - to inherit"),
         ("Agent model name outside the allow list → deny",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "gpt-6", "effort": "high"}}, True, "not in the allow list (fable / opus / sonnet / haiku)"),
-        ("Agent haiku without mark, effort medium → pass (haiku is a free tier)",
+        ("Agent haiku without mark, effort medium → pass (haiku needs no tag)",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "haiku", "effort": "medium"}}, False, None),
         ("Agent haiku effort low → deny (low is denied for every model)",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "haiku", "effort": "low"}}, True, "denied for every model"),
@@ -802,12 +803,16 @@ def _self_test():
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "low"}}, True, "denied for every model"),
         ("Agent sonnet effort low → deny",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "sonnet", "effort": "low"}}, True, "denied for every model"),
+        ("Agent effort 'Low' (uppercase) → the floor deny, not a lowercase hint (fixing the case would only earn a second deny)",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "Low"}}, True, "denied for every model"),
+        ("Agent effort unknown value → the allow list shown does not include low",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "ultra"}}, True, "allow list (medium/high/xhigh/max)"),
         ("Agent haiku effort xhigh (within the cap) → pass (no haiku-only ceiling)",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "haiku", "effort": "xhigh"}}, False, None),
         ("Agent old role marks [haiku role] [verify] left in the prompt are harmless → pass",
          {"tool_name": "Agent", "tool_input": {"prompt": "[haiku role: lint] [verify: lint 0 hits] x", "model": "haiku", "effort": "medium"}}, False, None),
         ("Workflow sonnet effort low → deny (line 2)",
-         wf("const a = await agent('p', {model: 'opus', effort: 'high'})\nconst b = await agent('q', {model: 'sonnet', effort: 'low'})"), True, "effort 'low' is denied for every model"),
+         wf("const a = await agent('p', {model: 'opus', effort: 'high'})\nconst b = await agent('q', {model: 'sonnet', effort: 'low'})"), True, "line 2: effort 'low' is denied for every model"),
         ("regex literal /[/*]/ → deny (fail-closed, reported as a regex literal)",
          wf("const r = /[/*]/\nconst a = await agent('p', {model: 'haiku', effort: 'low'})"), True, "regex literal"),
         # --- 2026-10-13 evening effort
@@ -880,10 +885,12 @@ def _self_test():
         ("SUBAGENT_EFFORT_CAP=max: Agent max without mark → pass (cap is max)",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "max"}}, False, None),
         # effort floor (low is denied for every model) and a cap below the floor
-        ("SUBAGENT_EFFORT_CAP=low: a cap below the floor (medium) is ignored → default (xhigh), medium passes",
+        ("SUBAGENT_EFFORT_CAP=low: a cap below the floor (medium) is raised to the floor → medium passes",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "medium"}}, False, None),
-        ("SUBAGENT_EFFORT_CAP=low: max still denied without a mark (default cap)",
-         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "max"}}, True, "the cap 'xhigh'"),
+        ("SUBAGENT_EFFORT_CAP=low: high denied without a mark (cap medium - a 0.2.0 cap=low setting does not silently loosen)",
+         {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "opus", "effort": "high"}}, True, "the cap 'medium'"),
+        ("SUBAGENT_EFFORT_CAP=low: high with a mark → pass",
+         {"tool_name": "Agent", "tool_input": {"prompt": "[owner-approved: high] x", "model": "opus", "effort": "high"}}, False, None),
         ("SUBAGENT_EFFORT_CAP=medium: haiku high denied without a mark (cap medium)",
          {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "haiku", "effort": "high"}}, True, "the cap 'medium'"),
         ("SUBAGENT_EFFORT_CAP=max: low is denied even when the cap is max",
@@ -903,6 +910,8 @@ def _self_test():
         fh.write("const a = await agent('p', {model: 'haiku', effort: 'max'})\n")
     with open(os.path.join(nest, "child-good.js"), "w", encoding="utf-8") as fh:
         fh.write("const a = await agent('p', {model: 'sonnet', effort: 'medium'})\n")
+    with open(os.path.join(nest, "child-low.js"), "w", encoding="utf-8") as fh:
+        fh.write("const a = await agent('p', {model: 'opus', effort: 'low'})\n")
     with open(os.path.join(nest, "child-nests.js"), "w", encoding="utf-8") as fh:
         fh.write("const a = await workflow('child-max')\n")
 
@@ -912,6 +921,7 @@ def _self_test():
     cases += [
         ("nested workflow('name') whose saved script uses effort max without a mark → deny", nested("const r = await workflow('child-max')"), True, "nested workflow('child-max')"),
         ("nested workflow({scriptPath}) relative to cwd, child good → pass", nested("const r = await workflow({scriptPath: 'child-good.js'})"), False, None),
+        ("nested workflow({scriptPath}) whose child uses effort low → deny (the floor applies to child scripts)", nested("const r = await workflow({scriptPath: 'child-low.js'})"), True, "denied for every model"),
         ("nested workflow({scriptPath}) whose child nests a max grandchild → deny", nested("const r = await workflow({scriptPath: 'child-nests.js'})"), True, "nested workflow('child-max')"),
         ("nested workflow(variable) → deny (target unknown)", nested("const r = await workflow(name)"), True, "workflow() target"),
         ("nested workflow({scriptPath: template with ${}}) → deny", nested("const r = await workflow({scriptPath: `${dir}/x.js`})"), True, "scriptPath (line"),
@@ -1066,6 +1076,9 @@ def _self_test():
         print("%s env: owner=%s cap=%s (what Claude Code passes to hooks - a terminal shell does not carry it)"
               % (_settings, _env.get(OWNER_ENV) or "(unset -> default %s)" % OWNER_DEFAULT,
                  _env.get("SUBAGENT_EFFORT_CAP") or "(unset -> %s)" % EFFORT_CAP_DEFAULT))
+        _cap = str(_env.get("SUBAGENT_EFFORT_CAP") or "").strip().lower()
+        if _cap in EFFORTS and EFFORTS.index(_cap) < EFFORTS.index(EFFORT_MIN):
+            print("WARN - settings.json env SUBAGENT_EFFORT_CAP=%s is below the floor (%s); the hook uses %s as the cap" % (_cap, EFFORT_MIN, EFFORT_MIN))
         if "SUBAGENT_HAIKU_ROLE_MODE" in _env:
             print("WARN - settings.json env still has the old key SUBAGENT_HAIKU_ROLE_MODE (no longer read since 0.3.0) - safe to remove")
     except Exception as e:

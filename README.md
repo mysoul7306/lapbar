@@ -33,12 +33,12 @@ lapbar session                      # one session: hook injection, rules loaded,
 
 The most expensive thing in Claude Code is the head model doing the legwork. Subagent work - scanning files, review lenses, collection - is just as good on a cheaper model, but an `Agent` / `Workflow` call that doesn't name a model inherits the head model. So hooks block that.
 
-- **model and effort must be literals** - `subagent-model-guard.py` denies an `Agent` / `Task` / `Workflow` call whose model or effort is missing, a variable or a ternary. `opus`, `sonnet` and `haiku` are the model's own call; the top tier (fable) passes only with an approval tag inside that same call. Effort `low` is denied for every model. Tags, settings and the constructs refused in Workflow scripts: [The model guard in detail](#the-model-guard-in-detail).
+- **model and effort must be literals** - `subagent-model-guard.py` denies an `Agent` / `Task` / `Workflow` call whose model or effort is missing, a variable or a ternary. `opus`, `sonnet` and `haiku` need no tag (which one to use is left to the calling session); the top tier (fable) passes only with an approval tag inside that same call. Effort `low` is denied for every model. Tags, settings and the constructs refused in Workflow scripts: [The model guard in detail](#the-model-guard-in-detail).
 - **lane loop** - `/lane` (the head only decodes, decomposes and synthesizes; read is opus high, collect is sonnet medium, refute is opus xhigh) and `/review-lane` (3 lenses → 2 refuters, agent cap 10) turn that split into a procedure.
 - **protected-branch push block** - `git-push-guard.py` denies pushes to develop / main / master, resolving refspec and upstream to decide, and failing closed when it can't. Merges by the AI, pushes by a human.
 - **memory hygiene** - `memory-lint-hook.py` checks the memory directory for broken links, public IPs, secrets and router size at session start.
 
-Both guards are **regex-based**: a safety net against the AI accidentally pushing or forgetting a model, not a sandbox against deliberate evasion (eval, config injection, shell tricks). Known evasion shapes are closed one by one as self-test cases (push 60, model 153), and the model guard's JS reader is checked against a real parser by a differential fuzz (`tools/fuzz/`, 0 bypasses in 60,000 scripts on this version); an AST-parser rewrite is the next milestone. What that means for `Workflow` scripts is listed in [What a Workflow script may not contain](#what-a-workflow-script-may-not-contain).
+Both guards are **regex-based**: a safety net against the AI accidentally pushing or forgetting a model, not a sandbox against deliberate evasion (eval, config injection, shell tricks). Known evasion shapes are closed one by one as self-test cases (push 60, model 149), and the model guard's JS reader is checked against a real parser by a differential fuzz (`tools/fuzz/`, 0 bypasses in 20,000 scripts on this version, 60,000 on 0.2.0); an AST-parser rewrite is the next milestone. What that means for `Workflow` scripts is listed in [What a Workflow script may not contain](#what-a-workflow-script-may-not-contain).
 
 ## What `lapbar report` measures
 
@@ -76,7 +76,7 @@ Head-side cost ($1,930) is the same on both sides, so the subagent share alone w
 
 | Kind | File | What it does |
 |---|---|---|
-| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | forces model and effort literals, denies effort `low`, the top tier needs a tag. `--self-test` 145 cases |
+| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | forces model and effort literals, denies effort `low`, the top tier needs a tag. `--self-test` 149 cases |
 | hook | `hooks/git-push-guard.py` (PreToolUse: Bash) | denies develop / main / master push, fail-closed. `--self-test` 60 cases |
 | hook | `hooks/memory-lint-hook.py` (SessionStart) + `scripts/memory-lint.py` | checks the memory directory, notifies only on problems |
 | hook | `hooks/git-readonly-guard.py` (agent-scoped PreToolUse: Bash, not wired into `settings.json`) | allowlist for read-only git inside the `scout-git` agent: pipes, redirects, write subcommands and unknown options are denied, `--no-ext-diff` is forced. `--self-test` 76 cases |
@@ -117,8 +117,8 @@ Hook messages are English. The rule files and the `/lane`, `/review-lane` proced
 
 | Field | Rule |
 |---|---|
-| `model` | one string literal naming a tier. `opus`, `sonnet` and `haiku` pass as they are (which of the three to use is the model's own call); `fable` needs a tag (next table). Full IDs such as `claude-opus-5-5` are mapped to their tier. `inherit`, variables, ternaries, parenthesized expressions and names with two tier words (`opus-haiku`) are denied. Allowed tiers live in the hook's single `TIERS` table |
-| `effort` | one lowercase literal: `medium`, `high`, `xhigh` or `max`. `low` is denied for every model (a haiku run at low effort produced bad output; one rule for all tiers is simpler than a per-tier window). Anything above `SUBAGENT_EFFORT_CAP` needs a tag (with the default cap, that is `max`). An omitted effort would inherit the session effort, so it is denied |
+| `model` | one string literal naming a tier. `opus`, `sonnet` and `haiku` pass as they are (which of the three to use is left to the calling session); `fable` needs a tag (next table). Full IDs such as `claude-opus-5-5` are mapped to their tier. `inherit`, variables, ternaries, parenthesized expressions and names with two tier words (`opus-haiku`) are denied. Allowed tiers live in the hook's single `TIERS` table |
+| `effort` | one lowercase literal: `medium`, `high`, `xhigh` or `max`. `low` is denied for every model (in a trial a haiku run at low effort ignored its output instructions, so the floor was set at `medium`, and one rule for all tiers is simpler than a per-tier window). Anything above `SUBAGENT_EFFORT_CAP` needs a tag (with the default cap, that is `max`). An omitted effort would inherit the session effort, so it is denied |
 | Workflow `agent()` opts | one flat object literal. An object chosen by a ternary, spread, computed keys, getters / setters, identifier escapes and shorthand (`{effort}`) are denied. A key counts only right after `{` or `,`, so `label: c ? model : 'x'` is not a `model` key. If a key repeats, the last one wins, as in JS |
 | fable count | at most 2 fable `agent()` call sites per Workflow script, even with tags |
 
@@ -141,7 +141,7 @@ haiku needs no tag. It fits work the parent verifies mechanically - test-result 
 
 | Key | Default | Effect |
 |---|---|---|
-| `SUBAGENT_EFFORT_CAP` | `xhigh` | highest effort allowed without a tag: one of `medium`, `high`, `xhigh`, `max`. Any other value (including `low`, which is below the floor) falls back to `xhigh` |
+| `SUBAGENT_EFFORT_CAP` | `xhigh` | highest effort allowed without a tag: one of `medium`, `high`, `xhigh`, `max`. `low` is below the floor and is raised to `medium`; any other value falls back to `xhigh` |
 | `SUBAGENT_GUARD_OWNER` | `owner` | name inside the approval tags. A value left as a `<placeholder>` counts as unset |
 
 If you set the owner name, replace `owner-approved` with the same name in the installed rules and procedures too (`rules/subagent-review.md`, `commands/lane.md`, `commands/review-lane.md`, `scripts/lane-workflow.js`; `grep -rl owner-approved ~/.claude` finds them all). Otherwise the rules tell the model to write a tag the hook no longer accepts.
@@ -170,7 +170,9 @@ Division after an identifier, a number, `]` or a non-header `)` is read as divis
 
 ### Checking it
 
-`python3 ~/.claude/hooks/subagent-model-guard.py --self-test` runs 145 regression cases and prints the env values it found. `lapbar doctor` runs that self-test and three probes (missing model, valid call, effort low) against the installed copy. The hidden-call shapes found so far are listed in `CHANGELOG.md`.
+`python3 ~/.claude/hooks/subagent-model-guard.py --self-test` runs 149 regression cases and prints the env values it found. `lapbar doctor` runs that self-test and three probes (missing model, valid call, effort low) against the installed copy. The hidden-call shapes found so far are listed in `CHANGELOG.md`.
+
+Upgrading from 0.2.0: run `lapbar install --force` so the hook, `scripts/lane-workflow.js`, `commands/lane.md` and `rules/subagent-review.md` move together. A plain `lapbar install` keeps every file that differs from the package (the 0.2.0 hook stays and `lapbar doctor` fails the new probe), and `--only hooks --force` updates the hook alone, after which the 0.2.0 collect lane (`effort: 'low'`) is denied. Re-apply any owner-name edits from the backup, then grep your own saved workflows for `effort: 'low'`.
 
 ## What was removed from the public release
 

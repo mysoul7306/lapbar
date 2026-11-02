@@ -19,7 +19,7 @@ oracle = {}
 for line in open(oracle_path, encoding="utf-8"):
     o = json.loads(line); oracle[o["id"]] = o
 
-SAFE_MODELS = {"opus", "sonnet", "haiku"}      # 0.3.0: haiku is a free tier
+SAFE_MODELS = {"opus", "sonnet", "haiku"}      # 0.3.0: haiku needs no tag
 SAFE_EFFORTS = {"medium", "high", "xhigh"}       # 0.3.0: low is denied for every model
 
 
