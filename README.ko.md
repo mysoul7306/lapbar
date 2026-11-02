@@ -33,12 +33,12 @@ lapbar session                    # one session: hook injection, rules loaded, s
 
 Claude Code 에서 가장 비싼 건 **머리 모델이 손발 일까지 하는 것** 이다. 파일 훑기, 리뷰 렌즈, 수집 같은 서브에이전트 작업은 더 싼 모델로도 품질이 같은데, `Agent` / `Workflow` 호출에 model 을 안 적으면 머리 모델을 그대로 상속한다. 그래서 hook 으로 막았다.
 
-- **model, effort 는 리터럴로** - `subagent-model-guard.py` 가 `Agent`, `Task`, `Workflow` 호출에서 model, effort 의 생략, 변수, 삼항식을 거부한다 (deny). 최상위 모델 (fable) 과 최하위 모델 (haiku, 품질 사고 전례로 기본 차단) 은 그 호출 안에 허용 표지가 있을 때만, haiku 는 역할 모드에서 역할 표지 + 검증 표지로도 통과한다. 표지, 설정, Workflow 스크립트에서 거부되는 꼴은 [model guard 자세히](#model-guard-자세히) 에.
-- **레인 루프** - `/lane` (머리는 해독, 분해, 종합만; read 는 opus high, collect 는 sonnet low, refute 는 opus xhigh) 과 `/review-lane` (렌즈 3 → 반박자 2, agent 상한 10) 이 그 배분을 절차로 굳힌다.
+- **model, effort 는 리터럴로** - `subagent-model-guard.py` 가 `Agent`, `Task`, `Workflow` 호출에서 model, effort 의 생략, 변수, 삼항식을 거부한다 (deny). `opus`, `sonnet`, `haiku` 는 표지 없이 (셋 중 무엇을 쓸지는 부르는 세션의 판단), 최상위 모델 (fable) 만 그 호출 안에 허용 표지가 있을 때 통과한다. effort `low` 는 어느 모델이든 거부. 표지, 설정, Workflow 스크립트에서 거부되는 꼴은 [model guard 자세히](#model-guard-자세히) 에.
+- **레인 루프** - `/lane` (머리는 해독, 분해, 종합만; read 는 opus high, collect 는 sonnet medium, refute 는 opus xhigh) 과 `/review-lane` (렌즈 3 → 반박자 2, agent 상한 10) 이 그 배분을 절차로 굳힌다.
 - **보호 브랜치 push 차단** - `git-push-guard.py` 가 develop / main / master 로 가는 push 를 refspec, upstream 까지 풀어 판정하고 못 풀면 fail-closed 로 막는다. 머지는 AI 가, push 는 사람이.
 - **메모리 위생** - `memory-lint-hook.py` 가 세션 시작 때 메모리 디렉토리의 깨진 링크, 공인 IP, 비밀값, 라우터 크기를 점검한다.
 
-두 가드는 **정규식 기반** 이다 - AI 가 실수로 push 하거나 model 을 빠뜨리는 걸 막는 안전장치이지, 작정한 우회 (eval, 설정 주입, 셸 트릭) 를 전부 막는 샌드박스가 아니다. 알려진 우회 꼴은 self-test 케이스로 하나씩 닫고 있고 (push 60, model 153), model guard 의 JS 읽기는 진짜 파서와 비교하는 차등 퍼징 (`tools/fuzz/`, 이 판에서 60,000 스크립트 중 우회 0) 으로 점검한다. AST 파서 전환은 다음 판 과제. 그래서 `Workflow` 스크립트에 쓰면 안 되는 것은 [Workflow 스크립트에 쓰면 안 되는 것](#workflow-스크립트에-쓰면-안-되는-것) 에 모아 두었다.
+두 가드는 **정규식 기반** 이다 - AI 가 실수로 push 하거나 model 을 빠뜨리는 걸 막는 안전장치이지, 작정한 우회 (eval, 설정 주입, 셸 트릭) 를 전부 막는 샌드박스가 아니다. 알려진 우회 꼴은 self-test 케이스로 하나씩 닫고 있고 (push 60, model 149), model guard 의 JS 읽기는 진짜 파서와 비교하는 차등 퍼징 (`tools/fuzz/`, 이 판에서 20,000 스크립트 중 우회 0, 0.2.0 은 60,000) 으로 점검한다. AST 파서 전환은 다음 판 과제. 그래서 `Workflow` 스크립트에 쓰면 안 되는 것은 [Workflow 스크립트에 쓰면 안 되는 것](#workflow-스크립트에-쓰면-안-되는-것) 에 모아 두었다.
 
 ## `lapbar report` 가 재는 것
 
@@ -76,7 +76,7 @@ lapbar report --json                   # 같은 리포트를 JSON 으로
 
 | 종류 | 파일 | 하는 일 |
 |---|---|---|
-| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | model, effort 리터럴 강제, 상위, 하위 티어는 표지 필요 (역할 모드면 haiku 는 역할 표지). `--self-test` 153 케이스 |
+| hook | `hooks/subagent-model-guard.py` (PreToolUse: Task, Agent, Workflow) | model, effort 리터럴 강제, effort `low` 거부, 상위 티어는 표지 필요. `--self-test` 149 케이스 |
 | hook | `hooks/git-push-guard.py` (PreToolUse: Bash) | develop / main / master push deny, fail-closed. `--self-test` 60 케이스 |
 | hook | `hooks/memory-lint-hook.py` (SessionStart) + `scripts/memory-lint.py` | 메모리 디렉토리 점검, 문제 있을 때만 알림 |
 | hook | `hooks/git-readonly-guard.py` (에이전트 전용 PreToolUse: Bash, `settings.json` 에는 안 들어감) | `scout-git` 에이전트 안에서 읽기 전용 git 만 통과시키는 allowlist: 파이프, 리다이렉트, 쓰기 서브커맨드, 모르는 옵션은 deny, `--no-ext-diff` 강제. `--self-test` 76 케이스 |
@@ -100,12 +100,12 @@ lapbar report --json                   # 같은 리포트를 JSON 으로
 전제: `Agent` 툴에 `effort` 파라미터가 있고 `Workflow` 툴이 있는 Claude Code (2026-10 기준 최신). 없는 판에서는 model 가드만 쓰고 `/lane`, `/review-lane` 은 건너뛴다.
 
 1. `lapbar install` → Claude Code 재시작
-2. 서브에이전트를 부를 때 model 과 effort 를 적는다 (fable, haiku 는 표지도 필요하다, 아래 참조). 안 적으면 hook 이 막고 이유를 보여 준다
+2. 서브에이전트를 부를 때 model 과 effort 를 적는다 (fable 은 표지도 필요하고 `low` 는 거부된다, 아래 참조). 안 적으면 hook 이 막고 이유를 보여 준다
 3. 리뷰는 `/review-lane`, 긴 작업은 `/lane` 으로
 4. 가끔 `lapbar report` 로 숫자를 ([무엇을 재나](#lapbar-report-가-재는-것)), `lapbar session` 으로 한 세션을 본다
 5. 계획 중 "이거 전에 있었나?" 는 `scout-git` 에이전트에 맡긴다. git 이 읽기 전용이라 안전하다
 
-가드가 무엇을 보는지, 표지, `settings.json` 의 선택 `env` 키 (effort 상한, haiku 역할 모드, 소유자 이름) 는 [model guard 자세히](#model-guard-자세히) 에 있다.
+가드가 무엇을 보는지, 표지, `settings.json` 의 선택 `env` 키 (effort 상한, 소유자 이름) 는 [model guard 자세히](#model-guard-자세히) 에 있다.
 
 hook 메시지는 영어다. 규칙 파일과 `/lane`, `/review-lane` 절차는 한국어 (이 하네스를 쓴 사람의 작업 언어). 필요하면 복사해서 고쳐 쓰면 된다 - 그래서 `install` 이 덮어쓰기를 하지 않는다.
 
@@ -117,8 +117,8 @@ hook 메시지는 영어다. 규칙 파일과 `/lane`, `/review-lane` 절차는 
 
 | 항목 | 규칙 |
 |---|---|
-| `model` | 티어 이름 하나를 적은 문자열 리터럴. `opus`, `sonnet` 은 그대로 통과, `fable`, `haiku` 는 표지가 필요하다 (다음 표). `claude-opus-5-5` 같은 전체 ID 는 티어로 환산한다. `inherit`, 변수, 삼항식, 괄호식, 티어 낱말이 둘인 이름 (`opus-haiku`) 은 거부. 허용 티어는 hook 의 `TIERS` 표 하나에 있다 |
-| `effort` | 소문자 리터럴 하나: `low`, `medium`, `high`, `xhigh`, `max`. `SUBAGENT_EFFORT_CAP` 위 단계는 표지가 필요하다 (기본 상한이면 `max` 가 그렇다). 생략하면 세션 effort 를 상속하므로 거부 |
+| `model` | 티어 이름 하나를 적은 문자열 리터럴. `opus`, `sonnet`, `haiku` 는 그대로 통과 (셋 중 무엇을 쓸지는 부르는 세션의 판단), `fable` 은 표지가 필요하다 (다음 표). `claude-opus-5-5` 같은 전체 ID 는 티어로 환산한다. `inherit`, 변수, 삼항식, 괄호식, 티어 낱말이 둘인 이름 (`opus-haiku`) 은 거부. 허용 티어는 hook 의 `TIERS` 표 하나에 있다 |
+| `effort` | 소문자 리터럴 하나: `medium`, `high`, `xhigh`, `max`. `low` 는 어느 모델이든 거부 (시험에서 haiku 를 low 로 돌렸을 때 출력 지시를 어겨 하한을 `medium` 에 뒀고, 티어별 창보다 전 티어 한 규칙이 단순하다). `SUBAGENT_EFFORT_CAP` 위 단계는 표지가 필요하다 (기본 상한이면 `max` 가 그렇다). 생략하면 세션 effort 를 상속하므로 거부 |
 | Workflow `agent()` opts | 평평한 객체 리터럴 하나. 삼항식으로 고른 객체, spread, 계산 키, getter / setter, 식별자 이스케이프, shorthand (`{effort}`) 는 거부. 키는 `{` 나 `,` 바로 뒤에서만 키로 세므로 `label: c ? model : 'x'` 의 `model :` 은 키가 아니다. 같은 키가 반복되면 JS 처럼 마지막 것 |
 | fable 개수 | 표지가 있어도 Workflow 스크립트 하나에 fable `agent()` 호출 위치 2곳까지 |
 
@@ -129,11 +129,9 @@ hook 메시지는 영어다. 규칙 파일과 `/lane`, `/review-lane` 절차는 
 | 표지 | 통과시키는 것 |
 |---|---|
 | `[owner-approved: fable]` | fable (2곳 상한 안에서) |
-| `[owner-approved: haiku]` | haiku, 상한까지의 effort 로 (상한 위는 effort 표지가 따로 필요하다) |
 | `[owner-approved: max]` (다른 단계도 같은 꼴) | 상한 위의 그 effort 단계 |
-| `[haiku role: <기계적 일>]` **과** `[verify: <부모가 돌릴 검증>]` | 역할 모드가 켜져 있을 때 (다음 표) haiku 를 effort `medium` 또는 `high` 로. `low`, `xhigh`, `max` 는 거부 |
 
-역할 모드는 부모가 기계적으로 검증하는 일 (테스트 결과 집계, lint 큐 정리, grep 요약, 체크섬 대조) 을 위한 것이다. 역할 범위는 medium 에서 high 까지: 그보다 생각이 필요한 일은 haiku 일이 아니다.
+haiku 는 표지가 필요 없다. 부모가 기계적으로 검증하는 일 (테스트 결과 집계, lint 큐 정리, grep 요약, 체크섬 대조) 에 맞고, 부모는 결과를 믿는 대신 그 검증을 돌린다.
 
 표지 안의 이름은 기본 `owner`, `SUBAGENT_GUARD_OWNER` 로 바꾼다 (`[alice-approved: fable]`).
 
@@ -143,8 +141,7 @@ hook 메시지는 영어다. 규칙 파일과 `/lane`, `/review-lane` 절차는 
 
 | 키 | 기본값 | 효과 |
 |---|---|---|
-| `SUBAGENT_EFFORT_CAP` | `xhigh` | 표지 없이 허용되는 effort 상한: `low`, `medium`, `high`, `xhigh`, `max` 중 하나. 다른 값은 `xhigh` 로 돌아간다 |
-| `SUBAGENT_HAIKU_ROLE_MODE` | off | `role` 이면 haiku 역할 표지가 켜진다, 다른 값은 off |
+| `SUBAGENT_EFFORT_CAP` | `xhigh` | 표지 없이 허용되는 effort 상한: `medium`, `high`, `xhigh`, `max` 중 하나. `low` 는 하한 아래라 `medium` 으로 올리고, 다른 값은 `xhigh` 로 돌아간다 |
 | `SUBAGENT_GUARD_OWNER` | `owner` | 허용 표지 안의 이름. `<자리표시자>` 그대로면 미설정 취급 |
 
 소유자 이름을 바꾸면 설치된 규칙, 절차 파일의 `owner-approved` 도 같은 이름으로 고친다 (`rules/subagent-review.md`, `commands/lane.md`, `commands/review-lane.md`, `scripts/lane-workflow.js`. `grep -rl owner-approved ~/.claude` 로 전부 찾는다). 안 그러면 규칙이 hook 이 더는 받지 않는 표지를 쓰라고 안내한다.
@@ -152,7 +149,6 @@ hook 메시지는 영어다. 규칙 파일과 `/lane`, `/review-lane` 절차는 
 ```
 "env": {
   "SUBAGENT_EFFORT_CAP": "xhigh",
-  "SUBAGENT_HAIKU_ROLE_MODE": "role",
   "SUBAGENT_GUARD_OWNER": "alice"
 }
 ```
@@ -174,7 +170,9 @@ hook 은 `agent()` 호출을 찾으려고 작은 상태 기계로 문자열과 �
 
 ### 점검
 
-`python3 ~/.claude/hooks/subagent-model-guard.py --self-test` 가 회귀 케이스 153개를 돌리고 읽은 env 값을 찍는다. `lapbar doctor` 는 설치된 사본으로 그 self-test 와 프로브 3개 (model 없음, 정상 호출, 표지 없는 haiku) 를 돈다. 지금까지 찾아 닫은 숨기기 꼴은 `CHANGELOG.md` 에 있다.
+`python3 ~/.claude/hooks/subagent-model-guard.py --self-test` 가 회귀 케이스 149개를 돌리고 읽은 env 값을 찍는다. `lapbar doctor` 는 설치된 사본으로 그 self-test 와 프로브 3개 (model 없음, 정상 호출, effort low) 를 돈다. 지금까지 찾아 닫은 숨기기 꼴은 `CHANGELOG.md` 에 있다.
+
+0.2.0 에서 올릴 때는 `lapbar install --force` 로 hook, `scripts/lane-workflow.js`, `commands/lane.md`, `rules/subagent-review.md` 를 함께 갱신한다. `--force` 없는 `lapbar install` 은 패키지와 다른 파일을 그대로 두고 (0.2.0 hook 이 남아 `lapbar doctor` 의 새 프로브가 FAIL), `--only hooks --force` 는 hook 만 바꿔 0.2.0 collect 레인 (`effort: 'low'`) 이 거부된다. 소유자 이름을 고친 사본은 백업에서 다시 반영하고, 직접 만든 저장 workflow 에서 `effort: 'low'` 를 찾아 고친다.
 
 ## 공개본에서 뺀 것
 
