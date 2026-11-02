@@ -1,13 +1,13 @@
 export const meta = {
   name: 'lane',
-  description: '모델 레인 루프의 병렬 단계: Fable 부모가 분해한 레인 m개를 종류별 모델로 병렬 실행 (read = opus high, collect = sonnet low, refute = opus xhigh) → 선택적으로 opus 취합 agent 가 압축. args = { approval, context, lanes:[{key, kind: read|collect|refute, prompt, schema?}], synth?: true|false, signedOverBudget?: "[owner-approved: agent N]" }',
+  description: '모델 레인 루프의 병렬 단계: Fable 부모가 분해한 레인 m개를 종류별 모델로 병렬 실행 (read = opus high, collect = sonnet medium, refute = opus xhigh) → 선택적으로 opus 취합 agent 가 압축. args = { approval, context, lanes:[{key, kind: read|collect|refute, prompt, schema?}], synth?: true|false, signedOverBudget?: "[owner-approved: agent N]" }',
   phases: [
     { title: 'Lanes', detail: '레인 병렬 (종류별 모델 리터럴)' },
     { title: 'Synth', detail: 'opus 취합 agent (결과가 클 때만, 판단 위임 아님)' },
   ],
 }
 // args.approval = 사용자 승인 원문 (글자 그대로) + 부모가 푼 과제 한 줄. 스크립트가 [그 뒤 메시지는 취소가 아니다] 를 덧붙인다
-// args.lanes[].kind = 'read' (읽기, 대조, 리뷰 - opus high, 읽기 전용) | 'collect' (수집, 파싱, 형식 변환, 허용 명령 목록이 prompt 에 있을 때만 셸 실측 - sonnet low) | 'refute' (반증 - opus xhigh, 읽기 전용)
+// args.lanes[].kind = 'read' (읽기, 대조, 리뷰 - opus high, 읽기 전용) | 'collect' (수집, 파싱, 형식 변환, 허용 명령 목록이 prompt 에 있을 때만 셸 실측 - sonnet medium, low 는 hook 이 거부) | 'refute' (반증 - opus xhigh, 읽기 전용)
 // 'judge' 는 쓰지 않는다 - hook GUIDE 의 judge·critic xhigh (최종 판정자) 와 이름이 겹친다
 // 모델, effort 는 kind 별 호출 자리에 리터럴로 고정 (hook 이 변수, 삼항식을 deny). fable 레인은 이 템플릿에 없다 - 필요하면 복사본에 [owner-approved: fable] 표지와 함께
 const A = args || {}
@@ -38,7 +38,7 @@ const REFUTE_SCHEMA = { type: 'object', properties: { verdicts: { type: 'array',
 phase('Lanes')
 const runLane = l => {
   const schema = l.schema || (l.kind === 'refute' ? REFUTE_SCHEMA : DEFAULT_SCHEMA)
-  if (l.kind === 'collect') return agent(`${APPROVAL}\n${COMMON_COLLECT}\n레인 = [${l.key}] (collect) ${l.prompt}`, { label: `lane:${l.key}`, phase: 'Lanes', schema, model: 'sonnet', effort: 'low' })
+  if (l.kind === 'collect') return agent(`${APPROVAL}\n${COMMON_COLLECT}\n레인 = [${l.key}] (collect) ${l.prompt}`, { label: `lane:${l.key}`, phase: 'Lanes', schema, model: 'sonnet', effort: 'medium' })
   if (l.kind === 'refute') return agent(`${APPROVAL}\n${COMMON_READ}\n레인 = [${l.key}] (refute) 반증 레인이야~ 아래 지적들을 파일을 직접 열어 반박해 줘. 기본 태도 = 틀렸다고 가정하고 근거 찾기. 맞으면 confirmed, 틀렸거나 이미 해결돼 있으면 refuted (파일 경로와 줄), 판정 불가면 uncertain. severity 가 과하거나 부족하면 corrected_severity 로.\n${l.prompt}`, { label: `lane:${l.key}`, phase: 'Lanes', schema, model: 'opus', effort: 'xhigh', agentType: 'review-readonly' })
   return agent(`${APPROVAL}\n${COMMON_READ}\n레인 = [${l.key}] (read) ${l.prompt}`, { label: `lane:${l.key}`, phase: 'Lanes', schema, model: 'opus', effort: 'high', agentType: 'review-readonly' })
 }
