@@ -17,6 +17,8 @@ BAD_CALLS = [
     "const r = await agent(`p`, {model: 'haiku', effort: 'max'})",
     "const r = await agent('p', {label: 'x', model: 'haiku', effort: 'max'})",
     "const r = await agent('p', {model: 'fable', effort: 'high'})",
+    "const r = await agent('p', {model: 'sonnet', effort: 'low'})",
+    "const r = await agent('p', {model: 'opus', effort: 'low'})",
     "const r = await agent('p', {effort: 'high'})",
     "const r = await agent('p', {model: m, effort: 'high'})",
     "const r = await agent('p', {model: 'opus'})",
@@ -28,7 +30,8 @@ BAD_CALLS = [
 ]
 GOOD_CALLS = [
     "const r = await agent('p', {model: 'opus', effort: 'high'})",
-    "const r = await agent('p', {model: 'sonnet', effort: 'low'})",
+    "const r = await agent('p', {model: 'sonnet', effort: 'medium'})",
+    "const r = await agent('p', {model: 'haiku', effort: 'medium'})",
 ]
 STMTS = [
     "x = a / b", "x = a / b / c", "x = (a) / 2", "x = f(a) / 2", "x = arr[0] / 2", "x = 1/2/3", "x = a /b/ c",
